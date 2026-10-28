@@ -9,6 +9,7 @@ TradingAgents 는 PyPI 에 없어 GitHub 소스로 따로 설치해야 합니다
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 
 from app.research.pipeline import RATINGS, ResearchResult
@@ -24,7 +25,7 @@ def run(symbol: str, name: str, market: str, as_of: str, quick: str, deep: str, 
 
     cfg = DEFAULT_CONFIG.copy()
     cfg.update(
-        llm_provider="openai",
+        llm_provider=os.getenv("TRADINGAGENTS_LLM_PROVIDER", "openai"),
         quick_think_llm=quick,
         deep_think_llm=deep,
         max_debate_rounds=1,
