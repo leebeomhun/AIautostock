@@ -8,6 +8,7 @@ Underweight·Sell 종목은 신규 매수를 막습니다.
 
 from __future__ import annotations
 
+import os
 import argparse
 import json
 import logging
@@ -92,7 +93,15 @@ def main() -> None:
     if not args.force and not (WINDOW[0] <= now.hour < WINDOW[1] and now.weekday() < 5):
         log.info("예약 시간대(평일 %02d–%02d시)가 아니어서 건너뜁니다. 바로 돌리려면 --force", *WINDOW)
         return
-    if not settings.openai_api_key:
+    chatgpt_ta = (
+        settings.research_engine == "tradingagents"
+        and os.getenv("TRADINGAGENTS_LLM_PROVIDER", "openai").lower() == "chatgpt"
+        and tradingagents_adapter.available()
+    )
+    if chatgpt_ta and not (Path.home() / ".tradingagents" / "chatgpt-auth.json").exists():
+        log.warning("ChatGPT 로그인 정보가 없어 심층 리서치를 건너뜁니다 (tradingagents login chatgpt)")
+        return
+    if not chatgpt_ta and not settings.openai_api_key:
         log.warning("OPENAI_API_KEY 가 없어 심층 리서치를 건너뜁니다")
         return
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()] or pick_symbols(settings, settings.research_max_symbols)
