@@ -148,6 +148,21 @@ class KiwoomMarket:
             self._quotes[symbol] = (now, q)
         return q
 
+    def stock_info(self, symbol: str) -> dict[str, float | str]:
+        """주식기본정보(ka10001)의 펀더멘털 항목. 심층 리서치의 펀더멘털 분석가가 읽습니다."""
+        data = self.client.request("ka10001", STKINFO_PATH, {"stk_cd": self._code(symbol)}).data
+        num = {
+            "per": "PER", "pbr": "PBR", "roe": "ROE(%)", "eps": "EPS(원)", "bps": "BPS(원)",
+            "mac": "시가총액(억원)", "sale_amt": "매출액(억원)", "bus_pro": "영업이익(억원)", "cup_nga": "당기순이익(억원)",
+            "for_exh_rt": "외인소진률(%)", "250hgst": "250일 최고(원)", "250lwst": "250일 최저(원)", "cur_prc": "현재가(원)", "flu_rt": "등락률(%)",
+        }
+        out: dict[str, float | str] = {"종목명": str(data.get("stk_nm") or symbol), "결산월": str(data.get("setl_mm") or "")}
+        for key, label in num.items():
+            raw = data.get(key)
+            if raw not in (None, ""):
+                out[label] = abs(to_float(raw)) if key in ("cur_prc", "250hgst", "250lwst") else to_float(raw)
+        return out
+
     # ---- 지수 (KOSPI 종합) --------------------------------------------------------
     def benchmark_history(self, days: int = 800) -> pd.Series:
         now = time.monotonic()

@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "AutoStock"
+    # 공개 도메인에 올릴 때 필수: 설정하면 /api 전체에 로그인을 요구합니다.
+    app_password: str | None = None
+    session_secret: str | None = None
     database_url: str = f"sqlite:///{BACKEND_DIR / 'data' / 'autostock.db'}"
     cache_dir: Path = BACKEND_DIR / "data" / "cache"
     frontend_dist: Path = ROOT_DIR / "frontend" / "dist"
@@ -65,6 +68,21 @@ class Settings(BaseSettings):
 
     # 실전 계좌(KIWOOM_MODE=real)에서 주문을 허용하기 전 필요한 모의투자 운영 일수
     paper_days_before_live: int = 14
+
+    # 보호 규칙 (app.trading.protections)
+    protect_stoploss_cooldown_days: int = 3
+    protect_exit_cooldown_days: int = 1
+    protect_stoploss_guard_count: int = 3
+    protect_max_drawdown_pct: float = 10.0
+
+    # 배치 결과(ML 점수·심층 리서치)를 읽는 폴더
+    data_dir: Path = BACKEND_DIR / "data"
+
+    # 심층 리서치 (app.research.daily) — 하루 한 번, 종목당 OpenAI 호출 6회 안팎
+    research_engine: Literal["builtin", "tradingagents"] = "builtin"
+    research_max_symbols: int = 5
+    research_quick_model: str = "gpt-6-luna"
+    research_deep_model: str | None = None
 
     @property
     def kiwoom_credentials(self) -> tuple[str | None, str | None]:

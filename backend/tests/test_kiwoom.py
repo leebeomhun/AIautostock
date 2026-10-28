@@ -122,3 +122,14 @@ def test_rejected_order_returns_message(fake):
     fake.responses["kt10000"] = [{"return_code": 20, "return_msg": "주문가능금액을 초과했습니다"}]
     result = KiwoomBroker(client_for(fake)).place_market_order("005930", "buy", 1)
     assert not result.accepted and "초과" in result.message
+
+
+def test_token_is_shared_through_cache_file(fake, tmp_path):
+    cache = tmp_path / "token-mock.json"
+    fake.responses["ka10001"] = [{"cur_prc": "1", "return_code": 0}, {"cur_prc": "2", "return_code": 0}]
+    first = KiwoomClient("APPKEY", "SECRET", mode="mock", max_rps=0, transport=httpx.MockTransport(fake), token_cache=cache)
+    first.request("ka10001", "/api/dostk/stkinfo", {"stk_cd": "005930"})
+    assert fake.token_count == 1 and (cache.stat().st_mode & 0o777) == 0o600
+    second = KiwoomClient("APPKEY", "SECRET", mode="mock", max_rps=0, transport=httpx.MockTransport(fake), token_cache=cache)
+    second.request("ka10001", "/api/dostk/stkinfo", {"stk_cd": "005930"})
+    assert fake.token_count == 1  # 두 번째 프로세스는 파일의 토큰을 재사용

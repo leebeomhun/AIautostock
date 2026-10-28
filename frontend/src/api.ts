@@ -169,6 +169,30 @@ export interface DecisionDetail extends Meta {
   impact_base: { equity: number; cash: number; holdings_count: number; realized_today: number; strategy_invested: number; already_held: boolean }
   fee_rate: number
   sell_tax_rate: number
+  ledger: LedgerEntry[]
+  research: ResearchItem | null
+}
+
+export interface LedgerEntry {
+  seq: number
+  at: string
+  kind: string
+  payload: Record<string, unknown>
+  prev_hash: string
+  hash: string
+}
+
+export interface ResearchItem {
+  symbol: string
+  name: string
+  rating: 'Buy' | 'Overweight' | 'Hold' | 'Underweight' | 'Sell'
+  confidence: number
+  summary: string
+  as_of: string
+  model: string
+  engine: string
+  sources: { title: string; url: string }[]
+  report_text?: string | null
 }
 
 export interface DecisionRow {
@@ -261,6 +285,8 @@ export interface SettingsView extends Meta {
   live_confirmed: boolean
   live_unlocked: boolean
   has_strategy: boolean
+  ml: { as_of: string; model: string; count: number; metrics: { valid_rank_ic: number; valid_ic: number; train_days: number; symbols: number } } | null
+  research: { as_of: string; model: string; count: number } | null
 }
 
 export interface Report {
@@ -270,6 +296,8 @@ export interface Report {
   by_strategy: { name: string; realized: number; trades: number; wins: number }[]
   performance: Performance
 }
+
+export const AUTH_EVENT = 'autostock:auth-required'
 
 export class ApiError extends Error {
   status: number
@@ -285,6 +313,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
+  if (res.status === 401 && !path.startsWith('/auth/')) {
+    // 세션이 끝나면 로그인 화면으로 돌아갑니다.
+    window.dispatchEvent(new Event(AUTH_EVENT))
+  }
   if (!res.ok) {
     let message = `요청 실패 (HTTP ${res.status})`
     try {
@@ -300,6 +332,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const api = {
+  authStatus: () => request<{ required: boolean; authenticated: boolean }>('GET', '/auth/status'),
+  login: (password: string) => request<{ ok: boolean }>('POST', '/auth/login', { password }),
+  logout: () => request<{ ok: boolean }>('POST', '/auth/logout'),
   dashboard: () => request<Dashboard>('GET', '/dashboard'),
   performance: (period: string) => request<Performance>('GET', `/performance?period=${period}`),
   decision: (id: string) => request<DecisionDetail>('GET', `/decisions/${encodeURIComponent(id)}`),
@@ -320,4 +355,6 @@ export const api = {
   completeOnboarding: () => request<SettingsView>('POST', '/onboarding/complete'),
   confirmLive: () => request<SettingsView>('POST', '/settings/live-confirm'),
   report: (period: string) => request<Report>('GET', `/report?period=${period}`),
+  verifyLedger: () => request<{ ok: boolean; count: number; broken_at: number | null; head: string }>('GET', '/ledger/verify'),
+  research: (symbol: string) => request<ResearchItem>('GET', `/insights/research/${encodeURIComponent(symbol)}`),
 }

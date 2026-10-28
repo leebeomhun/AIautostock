@@ -1,0 +1,23 @@
+{
+  "name": "AutoStock · AI 자동매매",
+  "short_name": "AutoStock",
+  "description": "OpenAI 판단과 키움증권 REST 주문으로 움직이는 AI 주식 자동매매",
+  "lang": "ko",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0E1014",
+  "theme_color": "#0E1014",
+  "categories": ["finance"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "매매 내역", "short_name": "내역", "url": "/history", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "새 전략 만들기", "short_name": "새 전략", "url": "/strategies/new", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

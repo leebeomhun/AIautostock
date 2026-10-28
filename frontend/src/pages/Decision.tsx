@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api, type DecisionDetail, type SignalItem } from '../api'
+import { api, type DecisionDetail, type ResearchItem, type SignalItem } from '../api'
 import { PriceChart } from '../components/Charts'
+import { Markdown } from '../components/Markdown'
 import { PageError, useShell } from '../components/Shell'
 import { clock, dateTime, mmss, sideLabel, signedWon, trendClass, won } from '../format'
 import { useAction, useNow, usePolling } from '../hooks'
@@ -129,6 +130,43 @@ function Chart({ d }: { d: DecisionDetail }) {
         markerColor={d.side === 'sell' ? '#7DB8FF' : '#FF5C5C'}
         label={`${d.name} 주가가 ${c.closes.length}거래일 동안 ${won(first)}원에서 ${won(last)}원으로 ${last >= first ? '올랐습니다' : '내렸습니다'}`}
       />
+    </section>
+  )
+}
+
+const RATING_KO: Record<ResearchItem['rating'], string> = { Buy: '매수', Overweight: '비중 확대', Hold: '보유', Underweight: '비중 축소', Sell: '매도' }
+const RATING_TONE: Record<ResearchItem['rating'], string> = { Buy: 'buy', Overweight: 'buy', Hold: 'info', Underweight: 'sell', Sell: 'sell' }
+
+function Research({ d }: { d: DecisionDetail }) {
+  const [open, setOpen] = useState(false)
+  const [report, setReport] = useState<string | null>(null)
+  const { busy, error, run } = useAction()
+  const r = d.research
+  if (!r) return null
+  const toggle = () => {
+    if (!open && report == null) run(() => api.research(d.symbol)).then((x) => x && setReport(x.report_text ?? '리포트 파일을 찾지 못했습니다.'))
+    setOpen(!open)
+  }
+  return (
+    <section aria-labelledby="res-h" className="card">
+      <div className="spread wrap">
+        <h2 id="res-h">심층 리서치</h2>
+        <span className="small dim">{r.as_of} · {r.engine === 'tradingagents' ? 'TradingAgents' : '멀티 에이전트(TradingAgents 구성)'}</span>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 12 }}>
+        <span className={`pill ${RATING_TONE[r.rating]}`} style={{ fontWeight: 600 }}>{RATING_KO[r.rating]} · {r.rating}</span>
+        <span className="small muted">신뢰도 {Math.round(r.confidence * 100)}%</span>
+      </div>
+      <p style={{ marginTop: 10, lineHeight: 1.6 }}>{r.summary}</p>
+      <button type="button" className="btn-link" style={{ paddingLeft: 0 }} aria-expanded={open} onClick={toggle} disabled={busy}>
+        {open ? '리포트 접기' : '전체 리포트 보기 →'}
+      </button>
+      {error && <div className="hint error">{error}</div>}
+      {open && report != null && (
+        <div className="inner" style={{ marginTop: 8, fontSize: 13, maxHeight: 520, overflowY: 'auto' }}>
+          <Markdown text={report} />
+        </div>
+      )}
     </section>
   )
 }
@@ -278,10 +316,53 @@ function DecisionLog({ d }: { d: DecisionDetail }) {
           {d.risk_notes.map((n) => <li key={n}>{n}</li>)}
         </ul>
       )}
+      <LedgerView d={d} />
       <a href={href} download={`${d.id}.json`} style={{ display: 'inline-flex', alignItems: 'center', minHeight: 44, marginTop: 6, fontSize: 13 }}>
         판단 로그 내려받기 →
       </a>
     </section>
+  )
+}
+
+const LEDGER_KIND: Record<string, string> = {
+  'decision.created': '판단 생성',
+  'decision.held': 'AI 보류',
+  'decision.approved': '사용자 승인',
+  'decision.rejected': '사용자 거절',
+  'decision.reopened': '다시 검토',
+  'decision.expired': '시간 초과',
+  'decision.cancelled': '취소',
+  'order.submitted': '주문 전송',
+  'order.failed': '주문 실패',
+  'order.filled': '체결',
+  'order.cancelled': '주문 취소',
+  'order.rejected': '주문 거부',
+}
+
+function LedgerView({ d }: { d: DecisionDetail }) {
+  const { data } = usePolling(api.verifyLedger, 60000)
+  if (!d.ledger.length) return null
+  return (
+    <div className="divider-top" style={{ marginTop: 12, paddingTop: 12 }}>
+      <div className="spread small">
+        <span className="muted">해시 체인 원장</span>
+        {data && (
+          <span className={data.ok ? 'accent' : 'up'} style={{ fontWeight: 600 }}>
+            {data.ok ? `검증됨 · 전체 ${data.count}건` : `변조 의심 · ${data.broken_at}번 기록`}
+          </span>
+        )}
+      </div>
+      <ol style={{ listStyle: 'none', margin: '8px 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12 }}>
+        {d.ledger.map((e) => (
+          <li key={e.seq} className="spread" style={{ gap: 8 }}>
+            <span>
+              <span className="mono dim">#{e.seq}</span> {LEDGER_KIND[e.kind] ?? e.kind}
+            </span>
+            <span className="mono dim" title={e.hash}>{clock(e.at)} · {e.hash.slice(0, 10)}…</span>
+          </li>
+        ))}
+      </ol>
+    </div>
   )
 }
 
@@ -395,6 +476,7 @@ export function Decision() {
             </div>
           </section>
           <Signals d={d} />
+          <Research d={d} />
           <Chart d={d} />
         </div>
         <div className="col-side" style={{ flexBasis: 360 }}>

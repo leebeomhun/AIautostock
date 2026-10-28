@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
+from app import ledger
 from app.api import views
 from app.container import Container
 from app.db import now_kst, session_scope
@@ -376,8 +377,24 @@ def live_confirm(request: Request) -> dict:
     view = views.settings_view(c)
     if not view["live_unlocked"]:
         raise HTTPException(status_code=400, detail=f"모의투자 {view['paper_days_required']}일 운영 후 열립니다")
-    with session_scope(c.session_factory) as s:
+    with c.engine.lock, session_scope(c.session_factory) as s:
         st = c.engine.account_settings(s)
         st.live_confirmed = True
         s.add(Activity(kind="system", title="실전 주문 허용", detail="이제 승인 후 주문·완전 자동 모드에서 실전 계좌로 주문합니다"))
+        ledger.append(s, "control.live_confirmed", None, {"broker": c.broker.label}, now_kst())
     return views.settings_view(c)
+
+
+# ---------------------------------------------------------------- 원장 · 배치 결과
+@router.get("/ledger/verify")
+def verify_ledger(request: Request) -> dict:
+    with session_scope(container(request).session_factory) as s:
+        return ledger.verify(s)
+
+
+@router.get("/insights/research/{symbol}")
+def research_report(request: Request, symbol: str) -> dict:
+    data = container(request).insights.research_report(symbol)
+    if data is None:
+        raise HTTPException(status_code=404, detail="이 종목의 심층 리서치가 없습니다")
+    return data

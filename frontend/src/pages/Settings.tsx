@@ -114,7 +114,21 @@ export function Settings() {
               <div><dt>시세</dt><dd>{s.market_source === 'kiwoom' ? '키움 REST' : '모의 시세'}</dd></div>
               <div><dt>AI 모델</dt><dd className="mono">{s.ai.model}</dd></div>
               <div><dt>모의투자 운영</dt><dd>{s.paper_days}일 / {s.paper_days_required}일</dd></div>
+              <div>
+                <dt>ML 점수 (야간)</dt>
+                <dd>{s.ml ? `${s.ml.as_of} · ${s.ml.count}종목 · 검증 순위 IC ${s.ml.metrics.valid_rank_ic.toFixed(3)}` : '아직 없음'}</dd>
+              </div>
+              <div>
+                <dt>심층 리서치 (장 전)</dt>
+                <dd>{s.research ? `${s.research.as_of} · ${s.research.count}종목` : '아직 없음'}</dd>
+              </div>
             </dl>
+            {s.ml && s.ml.metrics.valid_rank_ic < 0.02 && (
+              <div className="hint">최근 검증 구간에서 ML 예측력이 낮아(순위 IC 0.02 미만) 판단 점수에는 반영하지 않고 참고로만 보여 줍니다.</div>
+            )}
+            <button type="button" className="btn btn-ghost btn-block" style={{ marginTop: 14 }} onClick={() => api.logout().then(() => window.location.assign('/'))}>
+              로그아웃
+            </button>
           </section>
           <section className="card strong" aria-labelledby="live-h">
             <h2 id="live-h">실전 주문 허용</h2>

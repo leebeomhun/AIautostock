@@ -43,6 +43,31 @@ npm run dev
 키움 키가 없으면 로컬 시뮬레이션(모의 시세 + 로컬 모의 계좌)으로, OpenAI 키가 없으면 규칙 기반 설명으로 동작합니다.
 화면의 계좌 배지(모의투자 / 실전투자 / 로컬 시뮬레이션)와 판단 기록의 'AI 모델'에서 어느 경로로 돌고 있는지 확인할 수 있습니다.
 
+## 배포 (kiwoom.codesearch.ai.kr)
+
+- nginx `kiwoom.codesearch.ai.kr` → `127.0.0.1:8012` (SSL 은 기존 Certbot 인증서). 이전 설정은 `/etc/nginx/sites-available/kiwoom.codesearch.ai.kr.bak-20261028`.
+- pm2 (`ecosystem.config.cjs`):
+  - `autostock` — 웹 + 매매 엔진 (반드시 1개 인스턴스)
+  - `autostock-ml` — 평일 18:40 야간 ML 점수 (장중에는 건너뜀)
+  - `autostock-research` — 평일 07:20 심층 리서치 (06–09시 밖에서는 건너뜀)
+- 프런트를 바꾼 뒤: `cd frontend && npm run build && pm2 reload autostock`
+- 로그인: `.env` 의 `APP_PASSWORD` (세션 쿠키 30일, 실패 5회면 10분 잠금). 비어 있으면 로그인 없이 열리니 공개 도메인에서는 꼭 설정하세요.
+- PWA: `manifest.webmanifest` + `sw.js`. 앱 화면만 캐시하고 `/api` 응답(시세·주문)은 캐시하지 않습니다.
+
+## 보조 판단 (배치)
+
+- **ML 점수** `python -m app.ml.nightly` — qlib Alpha158 팩터 정의(157개, VWAP 제외)를 옮기고 LightGBM 으로 다음 거래일 순위를 학습합니다.
+  qlib 의 RobustZScoreNorm·CSRankNorm 순서를 따릅니다. 최근 60일 검증 순위 IC 가 0.02 미만이면 판단 점수에 반영하지 않고 참고로만 보여 줍니다.
+- **심층 리서치** `python -m app.research.daily [--symbols 005930] [--force]` — TradingAgents 의 역할 구성(기술·뉴스·펀더멘털 애널리스트 → 강세/약세 토론 → 포트폴리오 매니저 5단계 등급)을
+  OpenAI 로 구현했습니다. 대상은 보유 종목 + ML 상위 종목, 최대 `RESEARCH_MAX_SYMBOLS`(기본 5), 종목당 OpenAI 호출 6회 안팎.
+  Underweight·Sell 종목은 신규 매수를 막습니다. 원본 TradingAgents 를 설치하고 `RESEARCH_ENGINE=tradingagents` 로 바꾸면 원본을 씁니다.
+- qlib·TradingAgents 원본 패키지는 이 서버(aarch64)에서 GitHub 소스 설치가 필요해 기본 구성에는 넣지 않았습니다.
+
+## 보호 규칙 · 판단 원장
+
+- 보호 규칙 (freqtrade Protections 개념): 손절한 종목 3거래일 재진입 금지, 청산 후 1거래일 대기, 하루 손절 3회면 신규 매수 중지, 20일 고점 대비 −10% 낙폭이면 신규 매수 중지. `PROTECT_*` 로 조정.
+- 판단 원장 (해시 체인): 판단 생성·승인·거절·만료·주문·체결·모드 변경·긴급 정지를 순서대로 기록하고 각 기록에 직전 해시를 넣습니다. `GET /api/ledger/verify` 로 변조 여부를 검사합니다.
+
 ## 매매 흐름
 
 1. 엔진이 `ENGINE_INTERVAL_SECONDS` 마다 장중(KRX 09:00–15:30)에 전략별 종목을 살핍니다.

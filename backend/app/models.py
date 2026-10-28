@@ -190,3 +190,17 @@ class PaperOrder(Base):
     fee: Mapped[float] = mapped_column(Float)
     tax: Mapped[float] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_kst)
+
+
+class LedgerEntry(Base):
+    """해시 체인 판단 원장 (app.ledger)."""
+
+    __tablename__ = "ledger"
+
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    at: Mapped[datetime] = mapped_column(DateTime)
+    kind: Mapped[str] = mapped_column(String(40))
+    ref: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    prev_hash: Mapped[str] = mapped_column(String(64))
+    hash: Mapped[str] = mapped_column(String(64), unique=True)

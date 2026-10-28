@@ -10,6 +10,7 @@ import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app import ledger
 from app.container import Container
 from app.db import iso_kst, now_kst, session_scope
 from app.market.universe import instrument, universe_label
@@ -421,6 +422,8 @@ def decision_detail(c: Container, decision_id: str) -> dict[str, Any] | None:
             },
             "fee_rate": c.settings.fee_rate,
             "sell_tax_rate": c.settings.sell_tax_rate,
+            "ledger": ledger.entries_for(s, d.id),
+            "research": c.insights.research_for(d.symbol, now.date()),
         }
 
 
@@ -527,4 +530,6 @@ def settings_view(c: Container) -> dict[str, Any]:
             "live_confirmed": st.live_confirmed,
             "live_unlocked": paper_days >= c.settings.paper_days_before_live,
             "has_strategy": has_strategy,
+            "ml": c.insights.ml_status(),
+            "research": c.insights.research_status(),
         }

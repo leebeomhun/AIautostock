@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0E1014">
+<title>오프라인 · AutoStock</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #0E1014; color: #ECEEF2; font-family: 'IBM Plex Sans KR', system-ui, sans-serif; }
+  main { max-width: 360px; padding: 24px; text-align: center; }
+  img { width: 64px; height: 64px; border-radius: 14px; }
+  h1 { margin: 18px 0 8px; font-size: 20px; }
+  p { margin: 0; color: #A0A8B6; font-size: 14px; line-height: 1.6; }
+  button { margin-top: 20px; min-height: 48px; padding: 0 22px; border: none; border-radius: 10px; background: #C8F04A; color: #0E1014; font: inherit; font-weight: 700; cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+  <img src="/icons/icon-192.png" alt="">
+  <h1>인터넷에 연결되어 있지 않아요</h1>
+  <p>시세와 주문 상태는 실시간으로만 보여 드려요. AI 엔진은 서버에서 계속 동작하고, 연결되면 최신 상태를 다시 불러옵니다.</p>
+  <button type="button" onclick="location.reload()">다시 시도</button>
+</main>
+</body>
+</html>

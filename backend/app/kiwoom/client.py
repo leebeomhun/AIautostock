@@ -8,11 +8,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -82,6 +85,7 @@ class KiwoomClient:
         max_rps: float = 4.0,
         timeout: float = 15.0,
         transport: httpx.BaseTransport | None = None,
+        token_cache: Path | None = None,
     ) -> None:
         if not app_key or not app_secret:
             raise ValueError("KIWOOM_APP_KEY / KIWOOM_APP_SECRET 가 비어 있습니다")
@@ -92,6 +96,8 @@ class KiwoomClient:
         self._http = httpx.Client(base_url=self.base_url, timeout=timeout, transport=transport)
         self._token: str | None = None
         self._token_expires: datetime | None = None
+        # 서버와 배치 작업이 같은 앱키로 토큰을 번갈아 새로 받지 않도록 파일로 공유합니다.
+        self._token_cache = token_cache
         self._token_lock = threading.Lock()
         self._rate_lock = threading.Lock()
         self._min_interval = 1.0 / max_rps if max_rps > 0 else 0
@@ -116,13 +122,46 @@ class KiwoomClient:
         except (TypeError, ValueError):
             self._token_expires = datetime.now() + timedelta(hours=12)
         log.info("키움 접근토큰 발급 (%s, 만료 %s)", self.mode, self._token_expires)
+        self._save_token()
+
+    def _load_token(self) -> bool:
+        if not self._token_cache:
+            return False
+        try:
+            data = json.loads(self._token_cache.read_text())
+            if data.get("base_url") != self.base_url or data.get("key_tail") != self._app_key[-6:]:
+                return False
+            expires = datetime.fromisoformat(data["expires"])
+        except (OSError, ValueError, KeyError):
+            return False
+        if datetime.now() >= expires - timedelta(minutes=5):
+            return False
+        self._token, self._token_expires = data["token"], expires
+        return True
+
+    def _save_token(self) -> None:
+        if not self._token_cache or not self._token or not self._token_expires:
+            return
+        self._token_cache.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._token_cache.with_suffix(".tmp")
+        payload = {"base_url": self.base_url, "key_tail": self._app_key[-6:], "token": self._token, "expires": self._token_expires.isoformat()}
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump(payload, fh)
+        tmp.replace(self._token_cache)
 
     def _authorization(self, force_refresh: bool = False) -> str:
         with self._token_lock:
             # 만료 5분 전에는 미리 재발급합니다.
             stale = self._token_expires is None or datetime.now() >= self._token_expires - timedelta(minutes=5)
-            if force_refresh or self._token is None or stale:
-                self._issue_token()
+            if force_refresh:
+                rejected = self._token
+                # 다른 프로세스가 이미 새 토큰을 받아 두었으면 그것을 쓰고, 아니면 새로 받습니다.
+                if not self._load_token() or self._token == rejected:
+                    self._issue_token()
+            elif self._token is None or stale:
+                if not self._load_token():
+                    self._issue_token()
             return f"Bearer {self._token}"
 
     # ---- 공통 요청 -------------------------------------------------------

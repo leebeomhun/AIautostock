@@ -45,3 +45,24 @@ def test_sp500_rejected_for_kiwoom_only_strategy(settings, container):
     with client(settings, container) as http:
         r = http.post("/api/strategies", json={"template": "meanrev", "universe": "sp500", "amount": 1_000_000, "stop_pct": 5, "take_pct": 10, "max_weight_pct": 15})
         assert r.status_code == 400
+
+
+def test_password_protects_api(settings, container):
+    settings.app_password = "s3cret-pass"
+    with client(settings, container) as http:
+        assert http.get("/api/auth/status").json() == {"required": True, "authenticated": False}
+        assert http.get("/api/dashboard").status_code == 401
+        assert http.post("/api/control/stop").status_code == 401
+        assert http.post("/api/auth/login", json={"password": "wrong"}).status_code == 401
+        assert http.post("/api/auth/login", json={"password": "s3cret-pass"}).status_code == 200
+        assert http.get("/api/dashboard").status_code == 200
+        http.post("/api/auth/logout")
+        assert http.get("/api/dashboard").status_code == 401
+
+
+def test_login_rate_limit(settings, container):
+    settings.app_password = "s3cret-pass"
+    with client(settings, container) as http:
+        for _ in range(5):
+            http.post("/api/auth/login", json={"password": "nope"})
+        assert http.post("/api/auth/login", json={"password": "s3cret-pass"}).status_code == 429

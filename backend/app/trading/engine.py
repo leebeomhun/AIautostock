@@ -20,8 +20,10 @@ import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import ledger
 from app.ai.analyst import AIAnalyst, AIDecision, NewsResult
 from app.config import Settings
+from app.insights import BEARISH, Insights
 from app.db import now_kst, session_scope
 from app.market.base import MarketData
 from app.market.universe import instrument, universe_symbols
@@ -42,6 +44,7 @@ from app.quant.signals import (
     value_ranking,
 )
 from app.trading.broker import Broker, BrokerAccount
+from app.trading.protections import ProtectionConfig, account_block, symbol_block
 from app.trading.risk import LossState, check_buy, check_sell, size_buy
 
 log = logging.getLogger(__name__)
@@ -95,8 +98,16 @@ class TradingEngine:
         market: MarketData,
         broker: Broker,
         analyst: AIAnalyst,
+        insights: Insights | None = None,
     ) -> None:
         self.settings = settings
+        self.insights = insights
+        self.protections = ProtectionConfig(
+            stoploss_cooldown_days=settings.protect_stoploss_cooldown_days,
+            exit_cooldown_days=settings.protect_exit_cooldown_days,
+            stoploss_guard_count=settings.protect_stoploss_guard_count,
+            max_drawdown_pct=settings.protect_max_drawdown_pct,
+        )
         self.session_factory = session_factory
         self.market = market
         self.broker = broker
@@ -131,6 +142,10 @@ class TradingEngine:
     @staticmethod
     def _activity(s: Session, kind: str, title: str, detail: str = "", decision_id: str | None = None, at: datetime | None = None) -> None:
         s.add(Activity(kind=kind, title=title, detail=detail, decision_id=decision_id, at=at or now_kst()))
+
+    @staticmethod
+    def _ledger(s: Session, kind: str, ref: str | None, payload: dict[str, Any], at: datetime | None = None) -> None:
+        ledger.append(s, kind, ref, payload, at or now_kst())
 
     def _new_decision_id(self, s: Session, now: datetime) -> str:
         prefix = f"D-{now:%Y%m%d}-"
@@ -224,7 +239,7 @@ class TradingEngine:
                 self._auto_pause(s, strat, bench_vol, now)
                 # 일시정지한 전략도 보유 종목의 손절·익절·청산은 계속 관리합니다.
                 prepared.extend(
-                    self._prepare_strategy(s, st, strat, acct, loss, bench_ret1, bench_vol, now, entries=strat.status == "running")
+                    self._prepare_strategy(s, st, strat, acct, loss, bench_ret1, bench_vol, now, allow_entries=strat.status == "running")
                 )
                 s.commit()
             return prepared
@@ -300,7 +315,7 @@ class TradingEngine:
         bench_ret1: float | None,
         bench_vol: float | None,
         now: datetime,
-        entries: bool = True,
+        allow_entries: bool = True,
     ) -> list[Prepared]:
         out: list[Prepared] = []
         positions = s.scalars(select(Position).where(Position.strategy_id == strat.id)).all()
@@ -346,7 +361,7 @@ class TradingEngine:
         rebalance_drop: set[str] = set()
         rebalance_picks: list[tuple[str, list[Signal]]] = []
         quarter = f"{now.year}-Q{(now.month - 1) // 3 + 1}"
-        if entries and strat.template == "value" and strat.last_rebalanced != quarter:
+        if allow_entries and strat.template == "value" and strat.last_rebalanced != quarter:
             fundamentals = {}
             for sym in frames:
                 try:
@@ -383,6 +398,7 @@ class TradingEngine:
             if self._already_decided(s, strat.id, pos.symbol, "sell", reason, now):
                 continue
             cand = describe_exit(reason, pos.symbol, pos.name, ind, pos.avg_price, price, strat.stop_pct, strat.take_pct, bench_ret1)
+            self._attach_insights(cand, now)
             qty = max(1, pos.qty // 2) if reason == "take_profit" else pos.qty
             blocked = check_sell(loss, orders_today, strat.max_orders_per_day, cand.mandatory)
             if blocked:
@@ -415,7 +431,11 @@ class TradingEngine:
             orders_today += 1
 
         # ---- 신규 진입 -------------------------------------------------------
-        if loss.buys_halted or not entries:
+        if loss.buys_halted or not allow_entries:
+            return out
+        blocked_all = account_block(s, self.protections, now)
+        if blocked_all:
+            self._guard_activity(s, "보호 규칙 · 신규 매수 중지", blocked_all, now)
             return out
         held = {p.symbol: p for p in positions}
         entries: list[Candidate] = []
@@ -454,6 +474,14 @@ class TradingEngine:
                 break
             if self._already_decided(s, strat.id, cand.symbol, "buy", cand.reason, now):
                 continue
+            why = symbol_block(s, self.protections, cand.symbol, now)
+            research = self.insights.research_for(cand.symbol, now.date()) if self.insights else None
+            if why is None and research and research.get("rating") in BEARISH:
+                why = f"심층 리서치 의견 {research['rating']} ({research.get('as_of')}) · 신규 매수하지 않습니다"
+            if why:
+                self._guard_activity(s, f"{cand.name} 매수 보류", why, now)
+                continue
+            self._attach_insights(cand, now)
             price = price_of(cand.symbol)
             qty = size_buy(price, strat.allocation, invested, 0.0, strat.max_weight_pct, acct.cash, self.settings.fee_rate)
             chk = check_buy(qty, price, loss, orders_today, strat.max_orders_per_day, strategy_loss, strat.daily_loss_limit, 0.0, strat.allocation, strat.max_weight_pct)
@@ -493,6 +521,24 @@ class TradingEngine:
             strat.last_rebalanced = quarter
             self._activity(s, "strategy", f"{strat.name} {quarter} 리밸런싱", f"가치 순위 상위 {len(rebalance_picks)}종목 기준으로 매수 {taken}건 · 매도 {len(rebalance_drop)}건을 제안합니다")
         return out
+
+    def _attach_insights(self, cand: Candidate, now: datetime) -> None:
+        """배치가 만든 ML 순위·심층 리서치 의견을 근거 시그널로 붙입니다 (뉴스 항목 앞)."""
+        if not self.insights:
+            return
+        extra: list[Signal] = []
+        ml = self.insights.ml_signal(cand.symbol, cand.side, now.date())
+        if ml:
+            sig, adjust = ml
+            extra.append(sig)
+            cand.score = clamp(cand.score + adjust, 0.3, 0.9)
+            cand.metrics["ml_rank_pct"] = round(self.insights.ml_for(cand.symbol, now.date())["pct"] * 100, 1)
+        research = self.insights.research_signal(cand.symbol, now.date())
+        if research:
+            extra.append(research)
+        if extra:
+            at = next((i for i, x in enumerate(cand.signals) if x.key == "news"), len(cand.signals))
+            cand.signals[at:at] = extra
 
     def _guard_activity(self, s: Session, title: str, detail: str, now: datetime) -> None:
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -587,7 +633,9 @@ class TradingEngine:
                 if ai.action == "hold":
                     d.status, d.decided_by, d.decided_at = "held", "auto", now
                     self._activity(s, "ai_hold", f"{c.name} {side_ko} 보류", ai.summary, d.id)
+                    self._ledger(s, "decision.held", d.id, ledger.decision_payload(d), now)
                     continue
+                self._ledger(s, "decision.created", d.id, ledger.decision_payload(d), now)
                 pos = s.scalar(select(Position).where(Position.strategy_id == strat.id, Position.symbol == c.symbol))
                 if d.mode == "notify":
                     d.status = "notified"
@@ -611,6 +659,7 @@ class TradingEngine:
         if not result.accepted:
             d.status, d.status_note = "failed", result.message
             self._activity(s, "system", f"{d.name} {side_ko} 주문 실패", result.message, d.id)
+            self._ledger(s, "order.failed", d.id, {"qty": qty, "by": by, "message": result.message}, now)
             return
         d.status, d.qty = "executed", qty
         s.add(
@@ -627,6 +676,7 @@ class TradingEngine:
         )
         s.flush()
         self._activity(s, "order_sent", f"{d.name} {qty}주 시장가 {side_ko} 주문", f"주문번호 {result.order_no} · {'승인됨' if by == 'user' else '자동 실행'}", d.id)
+        self._ledger(s, "order.submitted", d.id, {"order_no": result.order_no, "symbol": d.symbol, "side": d.side, "qty": qty, "by": by, "broker": self.broker.label}, now)
         self._sync_orders(s, now)
 
     def _sync_orders(self, s: Session, now: datetime) -> None:
@@ -693,6 +743,13 @@ class TradingEngine:
     def _finalize(self, s: Session, o: Order, now: datetime) -> None:
         if o.side == "sell" and o.realized_pnl is not None:
             o.realized_pnl -= o.fee + o.tax
+        self._ledger(
+            s,
+            f"order.{o.status}",
+            o.decision_id,
+            {"order_no": o.broker_order_no, "symbol": o.symbol, "side": o.side, "qty": o.qty, "filled_qty": o.filled_qty, "fill_price": o.fill_price, "fee": o.fee, "tax": o.tax, "realized_pnl": o.realized_pnl},
+            now,
+        )
         side_ko = "매수" if o.side == "buy" else "매도"
         if o.filled_qty:
             if o.side == "buy":
@@ -712,6 +769,7 @@ class TradingEngine:
         for d in s.scalars(select(Decision).where(Decision.status == "pending", Decision.expires_at < now)).all():
             d.status, d.decided_at, d.decided_by = "expired", now, "system"
             d.status_note = "응답 시간이 지나 자동 취소됐습니다"
+            self._ledger(s, "decision.expired", d.id, {"expires_at": d.expires_at}, now)
             self._activity(s, "system", f"{d.name} {'매수' if d.side == 'buy' else '매도'} 제안 자동 취소", "승인 시간이 지나 주문하지 않았습니다", d.id)
             self._reset_note(s, d)
             if d.reason in ("rebalance", "rebalance_buy"):
@@ -759,6 +817,7 @@ class TradingEngine:
         n = 0
         for d in s.scalars(select(Decision).where(Decision.status == "pending")).all():
             d.status, d.decided_at, d.decided_by, d.status_note = "cancelled", now, "system", why
+            self._ledger(s, "decision.cancelled", d.id, {"why": why}, now)
             self._reset_note(s, d)
             n += 1
         for o in s.scalars(select(Order).where(Order.status.in_(OPEN_ORDER_STATES))).all():
@@ -792,6 +851,7 @@ class TradingEngine:
             loss = self.loss_state(s, st, acct.equity, now)
             if loss.all_halted or (d.side == "buy" and loss.buys_halted):
                 raise EngineError("일일 손실 한도에 도달해 주문할 수 없습니다")
+            self._ledger(s, "decision.approved", d.id, {"qty": qty, "proposed_qty": d.qty}, now)
             self._execute(s, d, qty, "user", now)
             if d.status == "failed":
                 raise EngineError(d.status_note or "주문이 거부됐습니다")
@@ -807,6 +867,7 @@ class TradingEngine:
                 raise EngineError("이미 처리된 제안입니다")
             d.status, d.decided_at, d.decided_by = "rejected", now, "user"
             d.feedback = (feedback or "").strip()[:500] or None
+            self._ledger(s, "decision.rejected", d.id, {"feedback": d.feedback}, now)
             self._activity(s, "system", f"{d.name} {'매수' if d.side == 'buy' else '매도'} 제안 거절", "이 결정은 AI 피드백으로 기록됩니다", d.id)
             self._reset_note(s, d)
             return d
@@ -821,6 +882,7 @@ class TradingEngine:
             if d.expires_at and d.expires_at < now:
                 raise EngineError("승인 시간이 지나 되돌릴 수 없습니다")
             d.status, d.decided_at, d.decided_by, d.feedback = "pending", None, None, None
+            self._ledger(s, "decision.reopened", d.id, {}, now)
             return d
 
     def cancel_order(self, decision_id: str) -> str:
@@ -844,6 +906,7 @@ class TradingEngine:
             st = self.account_settings(s)
             st.running = False
             n = self._cancel_all(s, now, "긴급 정지")
+            self._ledger(s, "control.stop", None, {"cancelled": n}, now)
             self._activity(s, "system", "긴급 정지", f"AI가 새 주문을 내지 않습니다 · 승인 대기·미체결 {n}건을 취소했습니다")
             return n
 
@@ -852,6 +915,7 @@ class TradingEngine:
             st = self.account_settings(s)
             st.running = True
             self._activity(s, "system", "AI 자동매매 다시 시작", f"{MODE_LABEL[self.effective_mode(st)]} 모드로 실행합니다")
+            self._ledger(s, "control.start", None, {"mode": st.mode})
 
     def set_mode(self, mode: str) -> None:
         if mode not in MODE_RANK:
@@ -861,5 +925,6 @@ class TradingEngine:
             if self.broker.is_live and not st.live_confirmed and mode != "notify":
                 raise EngineError("실전 계좌는 모의투자 운영 후 실전 주문을 허용해야 승인·자동 모드를 쓸 수 있습니다")
             if st.mode != mode:
+                self._ledger(s, "control.mode", None, {"from": st.mode, "to": mode})
                 st.mode = mode
                 self._activity(s, "system", f"자동화 모드 변경 · {MODE_LABEL[mode]}", "")

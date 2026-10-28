@@ -165,6 +165,10 @@ class SimulatedMarket:
     def risky_symbols(self) -> set[str]:
         return set()
 
+    def stock_info(self, symbol: str) -> dict[str, float | str]:
+        # 모의 시세에는 재무 데이터가 없습니다. 지어내지 않고 비워 둡니다.
+        return {}
+
     def status(self, now: datetime) -> MarketStatus:
         if self.always_open:
             return MarketStatus(True, f"모의 시세 · 상시 운영 · {now.strftime('%H:%M')}")
