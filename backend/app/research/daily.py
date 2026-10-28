@@ -95,7 +95,7 @@ def main() -> None:
         return
     chatgpt_ta = (
         settings.research_engine == "tradingagents"
-        and os.getenv("TRADINGAGENTS_LLM_PROVIDER", "openai").lower() == "chatgpt"
+        and settings.tradingagents_llm_provider.lower() == "chatgpt"
         and tradingagents_adapter.available()
     )
     if chatgpt_ta and not (Path.home() / ".tradingagents" / "chatgpt-auth.json").exists():
@@ -119,7 +119,7 @@ def main() -> None:
         inst = instrument(sym)
         try:
             if use_ta:
-                result = tradingagents_adapter.run(sym, inst.name, inst.market, as_of, settings.research_quick_model, deep, out_dir / "_tradingagents")
+                result = tradingagents_adapter.run(sym, inst.name, inst.market, as_of, settings.research_quick_model, deep, out_dir / "_tradingagents", settings.tradingagents_llm_provider)
             else:
                 history = market.history(sym, 300)
                 info = getattr(market, "stock_info", lambda _s: {})(sym)

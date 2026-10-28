@@ -19,13 +19,13 @@ def available() -> bool:
     return importlib.util.find_spec("tradingagents") is not None
 
 
-def run(symbol: str, name: str, market: str, as_of: str, quick: str, deep: str, work_dir: Path) -> ResearchResult:
+def run(symbol: str, name: str, market: str, as_of: str, quick: str, deep: str, work_dir: Path, provider: str | None = None) -> ResearchResult:
     from tradingagents.default_config import DEFAULT_CONFIG  # type: ignore[import-not-found]
     from tradingagents.graph.trading_graph import TradingAgentsGraph  # type: ignore[import-not-found]
 
     cfg = DEFAULT_CONFIG.copy()
     cfg.update(
-        llm_provider=os.getenv("TRADINGAGENTS_LLM_PROVIDER", "openai"),
+        llm_provider=provider or os.getenv("TRADINGAGENTS_LLM_PROVIDER", "openai"),
         quick_think_llm=quick,
         deep_think_llm=deep,
         max_debate_rounds=1,

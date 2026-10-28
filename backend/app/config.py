@@ -80,6 +80,7 @@ class Settings(BaseSettings):
 
     # 심층 리서치 (app.research.daily) — 하루 한 번, 종목당 OpenAI 호출 6회 안팎
     research_engine: Literal["builtin", "tradingagents"] = "builtin"
+    tradingagents_llm_provider: str = "openai"
     research_max_symbols: int = 5
     research_quick_model: str = "gpt-6.1-sol"
     research_deep_model: str | None = None
