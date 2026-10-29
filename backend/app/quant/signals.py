@@ -63,6 +63,10 @@ BREAKOUT_VOLUME_RATIO = 1.4
 # 20일 고점 돌파 허용 폭: 종가가 직전 20일 고점의 (1 − 이 값)을 넘으면 돌파로 봅니다. 0 이면 고점을 넘어야 합니다.
 # 1–2% 완화는 거래만 늘고 백테스트 성과가 일관되게 좋아지지 않아 0 으로 둡니다.
 BREAKOUT_TOLERANCE = 0.0
+# 52주 고점 필터: 종가가 52주(250거래일) 최고 종가에서 이 비율 안일 때만 돌파로 봅니다. 0 이면 끕니다.
+# 긴 하락 끝의 짧은 반등 돌파를 거릅니다. 설정 MOMENTUM_HIGH52_RANGE 로 바꾸고 엔진 시작 때 configure 로 반영합니다.
+# 상장 120거래일 미만이라 52주 고점을 모르는 종목은 거르지 않습니다.
+HIGH52_RANGE = 0.2
 NEWS_VOLATILITY_PAUSE = 28.0  # 시장 20일 변동성(연환산 %)이 이 값을 넘으면 뉴스 전략을 멈춥니다
 NEWS_MAX_HOLD_DAYS = 3
 # 보유 기간 청산: (거래일, 최소 수익률). 그 기간이 지나도 수익률이 기준 미만이면 정리하고, None 이면 무조건 정리합니다.
@@ -92,6 +96,13 @@ FLOW_BONUS = 0.03
 INTRADAY_VOLUME_CURVE = ((0, 0.0), (30, 0.17), (60, 0.27), (120, 0.41), (180, 0.52), (240, 0.62), (300, 0.73), (360, 0.86), (380, 0.9), (390, 1.0))
 # 장 시작 직후 몇 분치 거래량을 하루치로 크게 부풀리지 않도록 환산 비율의 하한을 둡니다.
 MIN_VOLUME_FRACTION = 0.1
+
+
+def configure(high52_range: float | None = None) -> None:
+    """설정(.env)에 있는 규칙 값을 반영합니다. 백테스트와 실시간이 같은 entry_frame 을 쓰므로 모듈 값으로 둡니다."""
+    global HIGH52_RANGE
+    if high52_range is not None:
+        HIGH52_RANGE = max(0.0, float(high52_range))
 
 
 def clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -166,6 +177,7 @@ def indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["ma60"] = ts.moving_average(close, ts.Window(60, 0))
     out["ma250"] = ts.moving_average(close, ts.Window(250, 0))
     out["high20_prev"] = close.rolling(20, min_periods=20).max().shift(1)
+    out["high250"] = close.rolling(250, min_periods=120).max()
     out["vol_avg20_prev"] = volume.rolling(20, min_periods=10).mean().shift(1)
     out["vol_avg5_prev"] = volume.rolling(5, min_periods=3).mean().shift(1)
     out["vol_ratio"] = volume / out["vol_avg20_prev"]
@@ -224,6 +236,8 @@ def entry_frame(template: str, ind: pd.DataFrame) -> pd.DataFrame:
         overbought = ((ind["rsi14"] - 70) / 30).clip(0, 1)
         score = (0.45 + 0.25 * s1 + 0.2 * s_vol + 0.1 * s_trend - 0.15 * overbought).clip(0.3, 0.9)
         entry = (c > ind["high20_prev"] * (1 - BREAKOUT_TOLERANCE)) & (ind["vol_ratio"] >= BREAKOUT_VOLUME_RATIO) & (c > ind["ma60"])
+        if HIGH52_RANGE > 0 and "high250" in ind:
+            entry &= (c >= ind["high250"] * (1 - HIGH52_RANGE)) | ind["high250"].isna()
     elif template == "meanrev":
         s_z = ((-ind["z20"] - Z_SCORE_BOUND) / 1.5).clip(0, 1)
         s_rsi = ((35 - ind["rsi14"]) / 15).clip(0, 1)
@@ -375,6 +389,10 @@ def describe_entry(template: str, symbol: str, name: str, ind: pd.DataFrame, ben
         signals.append(Signal("breakout", "20일 고점 돌파", f"직전 20일 고점 {row['high20_prev']:,.0f}원보다 {pct(margin)}", "buy", 0.5 + clamp(margin / 0.03) * 0.5))
         signals.append(Signal("volume", "거래량 증가", f"20일 평균 대비 {row['vol_ratio']:.1f}배{_partial_note(row)}", "buy", clamp((row["vol_ratio"] - 1) / 2)))
         signals.append(Signal("trend", "중기 추세", f"60일 이동평균보다 {pct(row['close'] / row['ma60'] - 1)} 위", "buy", clamp((row["close"] / row["ma60"] - 1) / 0.1)))
+        high250 = row.get("high250", float("nan"))
+        if HIGH52_RANGE > 0 and not math.isnan(high250):
+            gap = row["close"] / high250 - 1
+            signals.append(Signal("high52", "52주 고점 근처", f"52주 최고 종가 {high250:,.0f}원 대비 {pct(gap)} (기준 −{HIGH52_RANGE * 100:.0f}% 이내)", "buy", clamp(1 + gap / HIGH52_RANGE)))
         rsi = row["rsi14"]
         if rsi >= 70:
             signals.append(Signal("rsi", f"RSI(14) {rsi:.0f}", "과매수(70) 구간, 단기 되돌림 가능", "hold", clamp((rsi - 70) / 30 + 0.3)))

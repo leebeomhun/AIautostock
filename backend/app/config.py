@@ -85,6 +85,8 @@ class Settings(BaseSettings):
     # 0 이면 기본 목록만 씁니다. 모멘텀 3년 백테스트에서 40–50 이 가장 나았고, 100·200 은 중소형주 거짓 돌파로 MDD 가 커졌습니다.
     # 모멘텀·평균회귀는 장 마감 판단 구간에만 이 종목들의 일봉을 받습니다.
     k200_universe_size: int = 40
+    # 모멘텀 52주 고점 필터: 종가가 52주 최고 종가에서 이 비율 안일 때만 진입 (0 이면 끔). app.quant.signals.HIGH52_RANGE
+    momentum_high52_range: float = 0.2
     # 한 전략이 같은 업종(키움 업종명)에 동시에 들고 있을 수 있는 종목 수. 0 이면 제한하지 않습니다.
     # 업종 쏠림을 막지만 3년 백테스트에서는 2–4 모두 수익을 깎고 MDD 는 줄지 않아 기본은 끔입니다.
     max_positions_per_sector: int = 0

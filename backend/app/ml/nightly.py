@@ -27,6 +27,7 @@ from app.db import now_kst
 from app.insights import Insights
 from app.market.base import krx_session_status
 from app.market.calendar import is_trading_day
+from app.market.flow_store import save_snapshot
 from app.market.universe import UNIVERSES
 from app.ml.alpha158 import features, label
 
@@ -174,9 +175,25 @@ def train_and_score(histories: dict[str, pd.DataFrame], horizon: int = LABEL_HOR
     }
 
 
+def snapshot_flow(market: Any, data_dir: Path) -> int:
+    """장 마감 뒤 기관·외국인 연속 순매수 목록(ka10131)을 하루 한 번 남깁니다 (수급 가산 검증용). 저장한 종목 수."""
+    get = getattr(market, "investor_flow", None)
+    if get is None:
+        return 0
+    try:
+        flow = get()
+        if flow:
+            save_snapshot(data_dir, flow, now_kst(), "eod")
+        return len(flow)
+    except Exception as exc:  # noqa: BLE001 — 수급 저장이 실패해도 학습은 계속
+        log.warning("수급 스냅샷 저장 실패: %s", exc)
+        return 0
+
+
 def run(out_dir: Path) -> dict[str, Any]:
     settings = get_settings()
     market, _client = build_market(settings)
+    log.info("수급 스냅샷 %d종목 저장", snapshot_flow(market, settings.data_dir))
     symbols = universe(domestic_only=settings.use_kiwoom, market=market, size=settings.ml_universe_size)
     histories: dict[str, pd.DataFrame] = {}
     for sym in symbols:

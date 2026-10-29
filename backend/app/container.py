@@ -13,6 +13,7 @@ from app.db import make_session_factory
 from app.market.base import MarketData
 from app.market.calendar import set_extra_holidays
 from app.market.simulated import SimulatedMarket
+from app.quant import signals
 from app.trading.broker import Broker, PaperBroker
 from app.trading.engine import TradingEngine
 
@@ -72,6 +73,7 @@ def build_market(settings: Settings) -> tuple[MarketData, object | None]:
 
 
 def build_container(settings: Settings) -> Container:
+    signals.configure(high52_range=settings.momentum_high52_range)
     session_factory = make_session_factory(settings.database_url)
     market: MarketData
     broker: Broker

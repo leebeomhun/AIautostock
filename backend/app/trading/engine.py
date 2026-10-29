@@ -26,6 +26,7 @@ from app.config import Settings
 from app.insights import Insights
 from app.db import now_kst, session_scope
 from app.market.base import MarketData
+from app.market.flow_store import save_snapshot
 from app.market.universe import instrument, register, strategy_symbols, universe_symbols
 from app.models import Activity, AccountSettings, DayState, Decision, EquitySnapshot, Order, Position, Strategy
 from app.quant.allocation import regime_allocations
@@ -150,6 +151,7 @@ class TradingEngine:
         self._last_snapshot: datetime | None = None
         self._stat_cache: dict[tuple, tuple[Any, dict[str, Any] | None]] = {}
         self._listed_on: Any = None
+        self._flow_saved_on: Any = None
         self._news_cache: dict[tuple[str, str], NewsResult | None] = {}
         with session_scope(session_factory) as s:
             self.account_settings(s)
@@ -605,7 +607,7 @@ class TradingEngine:
         # 심층 리서치가 약세(Underweight·Sell)인 종목도 막지 않고, 점수를 깎아 뒤로 보내고 아래에서 적게 삽니다.
         # ML 순위 보정(예측력이 검증된 경우만)도 정렬 전에 반영해, 같은 주기 진입 수가 모자랄 때 상위 종목이 먼저 들어갑니다.
         # 모멘텀은 기관·외국인 동반 연속 순매수(키움 ka10131)도 작은 점수 가산으로만 씁니다 (진입 조건 아님).
-        flow = self._investor_flow() if entries and strat.template == "momentum" else {}
+        flow = self._investor_flow(now) if entries and strat.template == "momentum" else {}
         haircuts: dict[str, tuple[float, float, str]] = {}
         for cand in entries:
             self._attach_insights(cand, now)
@@ -726,15 +728,23 @@ class TradingEngine:
             at = next((i for i, x in enumerate(cand.signals) if x.key == "news"), len(cand.signals))
             cand.signals[at:at] = extra
 
-    def _investor_flow(self) -> dict[str, tuple[int, int]]:
+    def _investor_flow(self, now: datetime) -> dict[str, tuple[int, int]]:
         get = getattr(self.market, "investor_flow", None)
         if get is None:
             return {}
         try:
-            return get()
+            flow = get()
         except Exception as exc:  # noqa: BLE001
             log.warning("기관·외국인 수급 조회 실패: %s", exc)
             return {}
+        # 수급 가산 검증용으로 그날 처음 받은 목록을 한 번 남깁니다 (app.market.flow_store).
+        if flow and self._flow_saved_on != now.date():
+            try:
+                save_snapshot(self.settings.data_dir, flow, now, "close_window")
+                self._flow_saved_on = now.date()
+            except OSError as exc:
+                log.warning("수급 스냅샷 저장 실패: %s", exc)
+        return flow
 
     def _guard_activity(self, s: Session, title: str, detail: str, now: datetime) -> None:
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
