@@ -12,3 +12,6 @@ backend/data/
 # Frontend
 frontend/node_modules/
 frontend/dist/
+
+# 오프라인 연구 데이터 (research/fetch_long_data.py 로 다시 받음)
+research/data/

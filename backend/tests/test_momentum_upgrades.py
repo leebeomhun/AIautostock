@@ -149,17 +149,15 @@ def test_engine_proposes_trailing_stop_for_remainder(container, monkeypatch):
     assert "000660" not in sells or sells["000660"].candidate.reason != "trailing_stop"
 
 
-def test_weak_market_halves_momentum_buy_size(container, monkeypatch):
+def test_weak_market_pauses_momentum_entries(container, monkeypatch):
+    """약세장(KOSPI 60일선 아래) 모멘텀 신규 진입 중단 — 자세한 검사는 test_momentum_redesign."""
     c = container
     _momentum(c, ["005930"])
     monkeypatch.setattr("app.trading.engine.describe_entry", _always_breakout)
     monkeypatch.setattr(c.engine, "_bench", lambda: (0.0, 15.0, False))
-    normal = _buys(c)["005930"]
+    assert "005930" in _buys(c)
     monkeypatch.setattr(c.engine, "_bench", lambda: (0.0, 15.0, True))
-    weak = _buys(c)["005930"]
-    assert 0 < weak.qty <= normal.qty * signals.WEAK_MARKET_SIZE["momentum"] + 1
-    assert any("60일 이동평균" in n for n in weak.risk_notes) and not any("60일" in n for n in normal.risk_notes)
-    assert weak.context["market"]["kospi_below_ma60"] is True
+    assert signals.WEAK_MARKET_SIZE["momentum"] == 0.0 and _buys(c) == {}
 
 
 def test_sector_limit_skips_extra_same_sector_buys(container, monkeypatch):

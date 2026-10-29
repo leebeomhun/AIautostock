@@ -4,7 +4,7 @@ gs-quant 의 backtests 모듈처럼 '트리거 → 액션' 구조로 하루씩 �
 - 진입 트리거: signals.entry_frame (모멘텀 돌파 / 평균회귀 z-score)
 - 청산 트리거: 손절·익절(common_exit, 변동성 맞춤 폭), 부분 익절 뒤 트레일링 스톱(trailing_exit),
   전략 고유 청산·보유 기간 만료(template_exit)
-- 진입 필터: 시장 약세(KOSPI 60일선 아래)면 모멘텀 매수 비중 축소, 업종당 보유 종목 수 제한(max_per_sector, 기본 끔)
+- 진입 필터: 시장 약세(KOSPI 60일선 아래)면 모멘텀 신규 진입 중단(WEAK_MARKET_SIZE 0), 업종당 보유 종목 수 제한(max_per_sector, 기본 끔)
 - 리밸런싱 트리거: 분기 첫 거래일 (gs-quant PeriodicTrigger 에 해당)
 - 액션: 그날 종가에 시장가 체결 (슬리피지·수수료·매도 세금 0.20% 반영). 상한가로 마감한 날의 종가 매수는 체결되지 않은 것으로 봅니다 (app.quant.krx)
 - 결과: 정의할 수 없는 지표(매매 없는 승률, 변동 없는 샤프 등)는 0 대신 None, 데이터 부족·미반영 설정은 warnings 로 알립니다
@@ -346,7 +346,8 @@ def run_portfolio_backtest(
     """모멘텀·평균회귀를 현금 하나로 함께 돌리는 최소 멀티 전략 백테스트 (국면 배분 검증용).
 
     진입·청산 규칙은 run_backtest 와 같고, 실시간 엔진처럼 한 종목은 한 전략만 들고 전략마다 '배분 − 보유 평가금액' 안에서만 삽니다.
-    배분은 그날 평가자산 × weight 이고, 약세장에서는 allocation.regime_allocations 로 모멘텀 몫을 평균회귀로 옮깁니다.
+    배분은 그날 평가자산 × weight 이고, 약세장에서는 allocation.regime_allocations 로 모멘텀 몫을 regime_shift 만큼 줄여 현금으로 둡니다.
+    weight 합이 1 보다 작으면 나머지는 현금입니다.
     (실시간 배분은 고정 금액이라 이익이 쌓이면 배분을 늘려야 같은 결과입니다.) 가치·뉴스 전략은 지원하지 않습니다.
     """
     from app.quant.allocation import regime_allocations

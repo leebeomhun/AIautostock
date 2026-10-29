@@ -330,7 +330,7 @@ class TradingEngine:
             strats = s.scalars(select(Strategy).where(Strategy.status.in_(("running", "paused")))).all()
             for strat in strats:
                 self._auto_pause(s, strat, bench_vol, now)
-            # 약세장이면 모멘텀 배분 일부를 운영 중인 평균회귀 전략으로 옮깁니다 (REGIME_WEAK_SHIFT, 합계는 그대로).
+            # 약세장이면 모멘텀 배분을 REGIME_WEAK_SHIFT 만큼 줄여 현금으로 둡니다 (기본 0, 다른 전략으로 옮기지 않음).
             allocations = regime_allocations(
                 ((x.id, x.template, x.allocation) for x in strats if x.status == "running"), market_weak, self.settings.regime_weak_shift
             )
@@ -637,7 +637,8 @@ class TradingEngine:
                 cand.score = clamp(cand.score - cut[0], 0.3, 0.9)
                 cand.metrics["research_size_scale"] = cut[1]
         entries.sort(key=lambda c: c.score, reverse=True)
-        # 시장 약세(KOSPI 60일선 아래)면 모멘텀 신규 매수 금액을 줄입니다 (WEAK_MARKET_SIZE, 0 이면 쉼).
+        # 시장 약세(KOSPI 60일선 아래)면 모멘텀은 신규 매수를 쉬고 현금으로 둡니다 (WEAK_MARKET_SIZE 0).
+        # 보유 종목 청산 판단은 위에서 이미 끝났고, 보유 종목은 진입 후보에서 빠지므로 추가 매수도 없습니다.
         market_scale = WEAK_MARKET_SIZE.get(strat.template, 1.0) if market_weak else 1.0
         if entries and market_scale <= 0:
             self._guard_activity(s, f"시장 약세 · {strat.name} 신규 매수 쉼", f"KOSPI가 {WEAK_MARKET_MA}일 이동평균 아래입니다", now)

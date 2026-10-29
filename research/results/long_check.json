@@ -1,0 +1,765 @@
+{
+ "generated": "2026-10-29 18:02",
+ "data_range": "2016-01-04~2026-10-29",
+ "bench_source": "yfinance ^KS11",
+ "candidates": 200,
+ "main": {
+  "universe_size": 44,
+  "universe": [
+   "000270",
+   "000660",
+   "005380",
+   "005490",
+   "005930",
+   "006400",
+   "006800",
+   "008770",
+   "009150",
+   "009540",
+   "009830",
+   "010060",
+   "010140",
+   "010950",
+   "011070",
+   "011170",
+   "012330",
+   "015760",
+   "017670",
+   "023530",
+   "028050",
+   "028260",
+   "030200",
+   "032640",
+   "032830",
+   "033780",
+   "034220",
+   "034730",
+   "035420",
+   "035720",
+   "036570",
+   "047810",
+   "051900",
+   "051910",
+   "055550",
+   "066570",
+   "068270",
+   "071970",
+   "086790",
+   "090430",
+   "096770",
+   "105560",
+   "128940",
+   "207940"
+  ],
+  "cumulative": "2018–22",
+  "windows": {
+   "2018": {
+    "start": "2018-01-02",
+    "end": "2018-12-28",
+    "weak_days_pct": 73,
+    "kospi": {
+     "ret": -17.7,
+     "mdd": -23.2
+    },
+    "ew": {
+     "ret": -15.8,
+     "mdd": -23.8,
+     "symbols": 44
+    },
+    "baseline_mom": {
+     "ret": -12.8,
+     "mdd": -16.6,
+     "cagr": -13.0,
+     "sharpe": -1.22,
+     "trades": 124,
+     "orders": 259,
+     "warnings": []
+    },
+    "new_mom": {
+     "ret": -13.9,
+     "mdd": -17.1,
+     "cagr": -14.1,
+     "sharpe": -1.39,
+     "trades": 57,
+     "orders": 120,
+     "warnings": []
+    },
+    "baseline_acct": {
+     "ret": -10.8,
+     "mdd": -16.3,
+     "cagr": -10.9,
+     "sharpe": -1.1,
+     "trades": 243,
+     "orders": 505,
+     "warnings": []
+    },
+    "new_acct": {
+     "ret": -9.2,
+     "mdd": -11.6,
+     "cagr": -9.3,
+     "sharpe": -1.37,
+     "trades": 58,
+     "orders": 121,
+     "warnings": []
+    }
+   },
+   "2019": {
+    "start": "2019-01-02",
+    "end": "2019-12-30",
+    "weak_days_pct": 43,
+    "kospi": {
+     "ret": 9.3,
+     "mdd": -15.1
+    },
+    "ew": {
+     "ret": 5.8,
+     "mdd": -16.8,
+     "symbols": 44
+    },
+    "baseline_mom": {
+     "ret": -2.7,
+     "mdd": -6.9,
+     "cagr": -2.8,
+     "sharpe": -0.34,
+     "trades": 94,
+     "orders": 198,
+     "warnings": []
+    },
+    "new_mom": {
+     "ret": -1.5,
+     "mdd": -5.7,
+     "cagr": -1.5,
+     "sharpe": -0.2,
+     "trades": 67,
+     "orders": 143,
+     "warnings": []
+    },
+    "baseline_acct": {
+     "ret": -0.9,
+     "mdd": -8.2,
+     "cagr": -0.9,
+     "sharpe": -0.13,
+     "trades": 196,
+     "orders": 405,
+     "warnings": []
+    },
+    "new_acct": {
+     "ret": -1.9,
+     "mdd": -4.4,
+     "cagr": -2.0,
+     "sharpe": -0.37,
+     "trades": 63,
+     "orders": 134,
+     "warnings": []
+    }
+   },
+   "2020": {
+    "start": "2020-01-02",
+    "end": "2020-12-30",
+    "weak_days_pct": 25,
+    "kospi": {
+     "ret": 32.1,
+     "mdd": -35.7
+    },
+    "ew": {
+     "ret": 31.4,
+     "mdd": -39.8,
+     "symbols": 44
+    },
+    "baseline_mom": {
+     "ret": 24.1,
+     "mdd": -16.3,
+     "cagr": 24.3,
+     "sharpe": 1.39,
+     "trades": 141,
+     "orders": 325,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 3건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "new_mom": {
+     "ret": 24.6,
+     "mdd": -14.7,
+     "cagr": 24.8,
+     "sharpe": 1.44,
+     "trades": 131,
+     "orders": 301,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 3건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "baseline_acct": {
+     "ret": 15.7,
+     "mdd": -19.5,
+     "cagr": 15.9,
+     "sharpe": 0.95,
+     "trades": 218,
+     "orders": 483,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 4건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "new_acct": {
+     "ret": 17.7,
+     "mdd": -11.2,
+     "cagr": 17.9,
+     "sharpe": 1.44,
+     "trades": 124,
+     "orders": 281,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 3건은 체결되지 않은 것으로 봤습니다"
+     ]
+    }
+   },
+   "2021": {
+    "start": "2021-01-04",
+    "end": "2021-12-30",
+    "weak_days_pct": 41,
+    "kospi": {
+     "ret": 1.1,
+     "mdd": -14.1
+    },
+    "ew": {
+     "ret": 4.0,
+     "mdd": -18.2,
+     "symbols": 44
+    },
+    "baseline_mom": {
+     "ret": -2.9,
+     "mdd": -17.5,
+     "cagr": -2.9,
+     "sharpe": -0.17,
+     "trades": 171,
+     "orders": 372,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 1건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "new_mom": {
+     "ret": 5.1,
+     "mdd": -13.4,
+     "cagr": 5.3,
+     "sharpe": 0.31,
+     "trades": 121,
+     "orders": 270,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 1건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "baseline_acct": {
+     "ret": 0.5,
+     "mdd": -14.4,
+     "cagr": 0.6,
+     "sharpe": 0.04,
+     "trades": 258,
+     "orders": 547,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 1건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "new_acct": {
+     "ret": 4.6,
+     "mdd": -9.3,
+     "cagr": 4.7,
+     "sharpe": 0.38,
+     "trades": 110,
+     "orders": 245,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 1건은 체결되지 않은 것으로 봤습니다"
+     ]
+    }
+   },
+   "2022": {
+    "start": "2022-01-04",
+    "end": "2022-12-29",
+    "weak_days_pct": 76,
+    "kospi": {
+     "ret": -25.2,
+     "mdd": -27.9
+    },
+    "ew": {
+     "ret": -13.2,
+     "mdd": -20.0,
+     "symbols": 44
+    },
+    "baseline_mom": {
+     "ret": -13.2,
+     "mdd": -16.2,
+     "cagr": -13.4,
+     "sharpe": -1.51,
+     "trades": 108,
+     "orders": 231,
+     "warnings": []
+    },
+    "new_mom": {
+     "ret": -6.1,
+     "mdd": -9.0,
+     "cagr": -6.2,
+     "sharpe": -0.84,
+     "trades": 38,
+     "orders": 81,
+     "warnings": []
+    },
+    "baseline_acct": {
+     "ret": -11.2,
+     "mdd": -13.5,
+     "cagr": -11.4,
+     "sharpe": -1.25,
+     "trades": 221,
+     "orders": 460,
+     "warnings": []
+    },
+    "new_acct": {
+     "ret": -3.3,
+     "mdd": -5.7,
+     "cagr": -3.3,
+     "sharpe": -0.67,
+     "trades": 36,
+     "orders": 77,
+     "warnings": []
+    }
+   },
+   "2018–22": {
+    "start": "2018-01-02",
+    "end": "2022-12-29",
+    "weak_days_pct": 52,
+    "kospi": {
+     "ret": -9.8,
+     "mdd": -43.9
+    },
+    "ew": {
+     "ret": -3.3,
+     "mdd": -49.6,
+     "symbols": 44
+    },
+    "baseline_mom": {
+     "ret": -10.5,
+     "mdd": -33.0,
+     "cagr": -2.2,
+     "sharpe": -0.17,
+     "trades": 649,
+     "orders": 1390,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 4건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "new_mom": {
+     "ret": 10.2,
+     "mdd": -20.1,
+     "cagr": 2.0,
+     "sharpe": 0.16,
+     "trades": 429,
+     "orders": 929,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 4건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "baseline_acct": {
+     "ret": -10.9,
+     "mdd": -29.3,
+     "cagr": -2.3,
+     "sharpe": -0.2,
+     "trades": 1162,
+     "orders": 2420,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 5건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "new_acct": {
+     "ret": 4.7,
+     "mdd": -14.4,
+     "cagr": 0.9,
+     "sharpe": 0.1,
+     "trades": 406,
+     "orders": 872,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 4건은 체결되지 않은 것으로 봤습니다"
+     ]
+    }
+   }
+  },
+  "sensitivity": [
+   {
+    "label": "2016-06-30 이전 상장 기준",
+    "universe_size": 44,
+    "diff": "+['004020'] −['207940']",
+    "window": {
+     "start": "2018-01-02",
+     "end": "2022-12-29",
+     "weak_days_pct": 52,
+     "kospi": {
+      "ret": -9.8,
+      "mdd": -43.9
+     },
+     "ew": {
+      "ret": -6.9,
+      "mdd": -50.9,
+      "symbols": 44
+     },
+     "baseline_mom": {
+      "ret": -2.5,
+      "mdd": -27.8,
+      "cagr": -0.5,
+      "sharpe": -0.04,
+      "trades": 635,
+      "orders": 1363,
+      "warnings": [
+       "상한가로 마감한 날의 매수 신호 4건은 체결되지 않은 것으로 봤습니다"
+      ]
+     },
+     "new_mom": {
+      "ret": 11.3,
+      "mdd": -18.4,
+      "cagr": 2.2,
+      "sharpe": 0.17,
+      "trades": 414,
+      "orders": 899,
+      "warnings": [
+       "상한가로 마감한 날의 매수 신호 4건은 체결되지 않은 것으로 봤습니다"
+      ]
+     },
+     "baseline_acct": {
+      "ret": -12.4,
+      "mdd": -30.1,
+      "cagr": -2.6,
+      "sharpe": -0.22,
+      "trades": 1165,
+      "orders": 2431,
+      "warnings": [
+       "상한가로 마감한 날의 매수 신호 5건은 체결되지 않은 것으로 봤습니다"
+      ]
+     },
+     "new_acct": {
+      "ret": 1.1,
+      "mdd": -15.4,
+      "cagr": 0.2,
+      "sharpe": 0.02,
+      "trades": 409,
+      "orders": 880,
+      "warnings": [
+       "상한가로 마감한 날의 매수 신호 4건은 체결되지 않은 것으로 봤습니다"
+      ]
+     }
+    }
+   }
+  ]
+ },
+ "holdout": {
+  "universe_size": 44,
+  "universe": [
+   "000270",
+   "000660",
+   "000990",
+   "001440",
+   "003490",
+   "003670",
+   "005380",
+   "005490",
+   "005930",
+   "006400",
+   "009150",
+   "009830",
+   "010060",
+   "011070",
+   "011200",
+   "012330",
+   "012450",
+   "015760",
+   "017670",
+   "028260",
+   "030200",
+   "034020",
+   "035420",
+   "035720",
+   "036570",
+   "047810",
+   "051900",
+   "051910",
+   "055550",
+   "064350",
+   "066570",
+   "066970",
+   "068270",
+   "086790",
+   "090430",
+   "096770",
+   "105560",
+   "207940",
+   "259960",
+   "302440",
+   "323410",
+   "352820",
+   "373220",
+   "377300"
+  ],
+  "cumulative": "2023–26.10",
+  "windows": {
+   "2023": {
+    "start": "2023-01-02",
+    "end": "2023-12-28",
+    "weak_days_pct": 30,
+    "kospi": {
+     "ret": 19.3,
+     "mdd": -14.6
+    },
+    "ew": {
+     "ret": 14.3,
+     "mdd": -19.5,
+     "symbols": 44
+    },
+    "baseline_mom": {
+     "ret": -2.6,
+     "mdd": -13.7,
+     "cagr": -2.6,
+     "sharpe": -0.17,
+     "trades": 122,
+     "orders": 274,
+     "warnings": []
+    },
+    "new_mom": {
+     "ret": -9.0,
+     "mdd": -14.8,
+     "cagr": -9.1,
+     "sharpe": -0.57,
+     "trades": 109,
+     "orders": 240,
+     "warnings": []
+    },
+    "baseline_acct": {
+     "ret": 4.5,
+     "mdd": -13.3,
+     "cagr": 4.6,
+     "sharpe": 0.37,
+     "trades": 233,
+     "orders": 501,
+     "warnings": []
+    },
+    "new_acct": {
+     "ret": -6.2,
+     "mdd": -9.8,
+     "cagr": -6.3,
+     "sharpe": -0.61,
+     "trades": 109,
+     "orders": 243,
+     "warnings": []
+    }
+   },
+   "2024": {
+    "start": "2024-01-02",
+    "end": "2024-12-30",
+    "weak_days_pct": 52,
+    "kospi": {
+     "ret": -10.1,
+     "mdd": -18.4
+    },
+    "ew": {
+     "ret": -6.8,
+     "mdd": -13.1,
+     "symbols": 44
+    },
+    "baseline_mom": {
+     "ret": -12.2,
+     "mdd": -16.9,
+     "cagr": -12.2,
+     "sharpe": -0.76,
+     "trades": 137,
+     "orders": 300,
+     "warnings": []
+    },
+    "new_mom": {
+     "ret": -4.1,
+     "mdd": -10.2,
+     "cagr": -4.1,
+     "sharpe": -0.25,
+     "trades": 85,
+     "orders": 188,
+     "warnings": []
+    },
+    "baseline_acct": {
+     "ret": -0.8,
+     "mdd": -9.9,
+     "cagr": -0.8,
+     "sharpe": -0.06,
+     "trades": 253,
+     "orders": 539,
+     "warnings": []
+    },
+    "new_acct": {
+     "ret": -1.3,
+     "mdd": -7.1,
+     "cagr": -1.3,
+     "sharpe": -0.11,
+     "trades": 82,
+     "orders": 182,
+     "warnings": []
+    }
+   },
+   "2025": {
+    "start": "2025-01-02",
+    "end": "2025-12-30",
+    "weak_days_pct": 11,
+    "kospi": {
+     "ret": 75.7,
+     "mdd": -14.1
+    },
+    "ew": {
+     "ret": 62.9,
+     "mdd": -14.6,
+     "symbols": 44
+    },
+    "baseline_mom": {
+     "ret": 50.0,
+     "mdd": -17.1,
+     "cagr": 50.5,
+     "sharpe": 2.3,
+     "trades": 153,
+     "orders": 356,
+     "warnings": []
+    },
+    "new_mom": {
+     "ret": 44.1,
+     "mdd": -17.9,
+     "cagr": 44.6,
+     "sharpe": 1.98,
+     "trades": 154,
+     "orders": 356,
+     "warnings": []
+    },
+    "baseline_acct": {
+     "ret": 35.8,
+     "mdd": -13.2,
+     "cagr": 36.1,
+     "sharpe": 2.09,
+     "trades": 218,
+     "orders": 484,
+     "warnings": []
+    },
+    "new_acct": {
+     "ret": 35.0,
+     "mdd": -13.1,
+     "cagr": 35.4,
+     "sharpe": 2.19,
+     "trades": 143,
+     "orders": 332,
+     "warnings": []
+    }
+   },
+   "2026": {
+    "start": "2026-01-02",
+    "end": "2026-10-29",
+    "weak_days_pct": 34,
+    "kospi": {
+     "ret": 37.8,
+     "mdd": -40.0
+    },
+    "ew": {
+     "ret": 11.9,
+     "mdd": -37.7,
+     "symbols": 44
+    },
+    "baseline_mom": {
+     "ret": 38.5,
+     "mdd": -19.0,
+     "cagr": 48.7,
+     "sharpe": 1.76,
+     "trades": 129,
+     "orders": 302,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 2건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "new_mom": {
+     "ret": 40.2,
+     "mdd": -19.0,
+     "cagr": 51.1,
+     "sharpe": 1.86,
+     "trades": 111,
+     "orders": 261,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 2건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "baseline_acct": {
+     "ret": 36.7,
+     "mdd": -12.0,
+     "cagr": 46.5,
+     "sharpe": 2.12,
+     "trades": 198,
+     "orders": 447,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 3건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "new_acct": {
+     "ret": 31.4,
+     "mdd": -12.5,
+     "cagr": 39.5,
+     "sharpe": 1.94,
+     "trades": 97,
+     "orders": 230,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 2건은 체결되지 않은 것으로 봤습니다"
+     ]
+    }
+   },
+   "2023–26.10": {
+    "start": "2023-01-02",
+    "end": "2026-10-29",
+    "weak_days_pct": 32,
+    "kospi": {
+     "ret": 166.8,
+     "mdd": -40.0
+    },
+    "ew": {
+     "ret": 129.8,
+     "mdd": -40.4,
+     "symbols": 44
+    },
+    "baseline_mom": {
+     "ret": 91.3,
+     "mdd": -19.1,
+     "cagr": 18.5,
+     "sharpe": 0.93,
+     "trades": 552,
+     "orders": 1243,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 2건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "new_mom": {
+     "ret": 92.1,
+     "mdd": -18.6,
+     "cagr": 18.6,
+     "sharpe": 0.9,
+     "trades": 456,
+     "orders": 1031,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 2건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "baseline_acct": {
+     "ret": 101.0,
+     "mdd": -14.8,
+     "cagr": 20.1,
+     "sharpe": 1.18,
+     "trades": 923,
+     "orders": 1989,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 3건은 체결되지 않은 것으로 봤습니다"
+     ]
+    },
+    "new_acct": {
+     "ret": 67.0,
+     "mdd": -14.6,
+     "cagr": 14.4,
+     "sharpe": 0.95,
+     "trades": 441,
+     "orders": 993,
+     "warnings": [
+      "상한가로 마감한 날의 매수 신호 2건은 체결되지 않은 것으로 봤습니다"
+     ]
+    }
+   }
+  }
+ }
+}
