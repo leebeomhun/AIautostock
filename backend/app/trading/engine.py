@@ -28,6 +28,7 @@ from app.db import now_kst, session_scope
 from app.market.base import MarketData
 from app.market.universe import instrument, register, strategy_symbols, universe_symbols
 from app.models import Activity, AccountSettings, DayState, Decision, EquitySnapshot, Order, Position, Strategy
+from app.quant.allocation import regime_allocations
 from app.quant.signals import (
     CLOSE_WINDOW_TEMPLATES,
     NEWS_VOLATILITY_PAUSE,
@@ -322,12 +323,19 @@ class TradingEngine:
                 d.qty * d.price for d in s.scalars(select(Decision).where(Decision.status == "pending", Decision.side == "buy")).all()
             )
             budget = TickBudget(cash=max(0.0, acct.cash - pending_buy), claimed=set(s.scalars(select(Position.symbol)).all()))
-            for strat in s.scalars(select(Strategy).where(Strategy.status.in_(("running", "paused")))).all():
+            strats = s.scalars(select(Strategy).where(Strategy.status.in_(("running", "paused")))).all()
+            for strat in strats:
                 self._auto_pause(s, strat, bench_vol, now)
+            # 약세장이면 모멘텀 배분 일부를 운영 중인 평균회귀 전략으로 옮깁니다 (REGIME_WEAK_SHIFT, 합계는 그대로).
+            allocations = regime_allocations(
+                ((x.id, x.template, x.allocation) for x in strats if x.status == "running"), market_weak, self.settings.regime_weak_shift
+            )
+            for strat in strats:
                 # 일시정지한 전략도 보유 종목의 손절·익절·청산은 계속 관리합니다.
                 prepared.extend(
                     self._prepare_strategy(
-                        s, st, strat, acct, loss, bench_ret1, bench_vol, now, budget, allow_entries=strat.status == "running", market_weak=market_weak
+                        s, st, strat, acct, loss, bench_ret1, bench_vol, now, budget,
+                        allow_entries=strat.status == "running", market_weak=market_weak, allocation=allocations.get(strat.id),
                     )
                 )
                 s.commit()
@@ -421,8 +429,10 @@ class TradingEngine:
         budget: TickBudget,
         allow_entries: bool = True,
         market_weak: bool = False,
+        allocation: float | None = None,
     ) -> list[Prepared]:
         out: list[Prepared] = []
+        allocation = float(strat.allocation) if allocation is None else allocation
         positions = s.scalars(select(Position).where(Position.strategy_id == strat.id)).all()
         symbols = self._universe(strat)
         if strat.exclude_risky:
@@ -460,6 +470,7 @@ class TradingEngine:
             "name": strat.name,
             "template": strat.template,
             "allocation": strat.allocation,
+            "effective_allocation": round(allocation),
             "stop_pct": strat.stop_pct,
             "take_pct": strat.take_pct,
             "max_weight_pct": strat.max_weight_pct,
@@ -643,8 +654,8 @@ class TradingEngine:
             levels = risk_levels(strat.template, strat.stop_pct, strat.take_pct, vol0)
             cut = haircuts.get(cand.symbol)
             weight = strat.max_weight_pct * levels.size_scale * (cut[1] if cut else 1.0) * market_scale
-            qty = size_buy(price, strat.allocation, invested, 0.0, weight, budget.cash, self.settings.fee_rate)
-            chk = check_buy(qty, price, loss, orders_today, strat.max_orders_per_day, strategy_loss, strat.daily_loss_limit, 0.0, strat.allocation, strat.max_weight_pct)
+            qty = size_buy(price, allocation, invested, 0.0, weight, budget.cash, self.settings.fee_rate)
+            chk = check_buy(qty, price, loss, orders_today, strat.max_orders_per_day, strategy_loss, strat.daily_loss_limit, 0.0, allocation, strat.max_weight_pct)
             if chk.blocked:
                 self._guard_activity(s, f"{cand.name} 매수 보류", chk.reason or "", now)
                 continue
@@ -654,6 +665,8 @@ class TradingEngine:
                 chk.notes.append(cut[2])
             if market_scale < 1:
                 chk.notes.append(f"KOSPI가 {WEAK_MARKET_MA}일 이동평균 아래라 매수 금액을 {market_scale * 100:.0f}%로 줄였습니다")
+            if abs(allocation - strat.allocation) >= 1:
+                chk.notes.append(f"약세장 국면 배분 · 이 전략 배분 {strat.allocation:,}원 → {allocation:,.0f}원")
             out.append(
                 Prepared(
                     strategy_id=strat.id,

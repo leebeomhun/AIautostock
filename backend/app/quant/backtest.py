@@ -207,6 +207,13 @@ def run_backtest(params: BacktestParams, frames: dict[str, pd.DataFrame], benchm
             value += (px(sym, d, "close") or p.avg) * p.qty
         equity_curve.append(value)
 
+    note = "가치 전략은 과거 시점의 PER·PBR 대신 가격 대용 지표로 백테스트합니다." if params.template == "value" else None
+    return _finish(equity_curve, dates, benchmark, params.amount, wins, losses, orders, note)
+
+
+def _finish(
+    equity_curve: list[float], dates: pd.DatetimeIndex, benchmark: pd.Series, amount: float, wins: int, losses: int, orders: int, note: str | None
+) -> BacktestResult:
     equity = pd.Series(equity_curve, index=dates)
     bench = benchmark.reindex(dates).ffill()
     eq_norm = ts.index(equity)
@@ -233,13 +240,127 @@ def run_backtest(params: BacktestParams, frames: dict[str, pd.DataFrame], benchm
         win_rate=round(wins / closed * 100) if closed else 0,
         trades=closed,
         orders=orders,
-        total_return=round((float(equity.iloc[-1]) / params.amount - 1) * 100, 1),
+        total_return=round((float(equity.iloc[-1]) / amount - 1) * 100, 1),
         benchmark_return=round((float(bench_norm.iloc[-1]) - 1) * 100, 1),
         sharpe=round(ts.sharpe_ratio(equity), 2),
         volatility=round(float(ts.returns(equity).std() * math.sqrt(252) * 100), 1),
         worst_month=worst,
-        note="가치 전략은 과거 시점의 PER·PBR 대신 가격 대용 지표로 백테스트합니다." if params.template == "value" else None,
+        note=note,
     )
+
+
+@dataclass
+class Sleeve:
+    """포트폴리오 백테스트의 전략 하나. weight 는 평가자산 중 이 전략에 맡기는 비율(0–1)입니다."""
+
+    template: str
+    weight: float
+    stop_pct: float
+    take_pct: float
+    max_weight_pct: float
+
+
+def run_portfolio_backtest(
+    sleeves: list[Sleeve],
+    frames: dict[str, pd.DataFrame],
+    benchmark: pd.Series,
+    regime_shift: float = 0.0,
+    max_orders_per_day: int = 20,
+    fee_rate: float = 0.00015,
+    sell_tax_rate: float = 0.0018,
+    slippage_rate: float = 0.0005,
+    years: float = 3.0,
+    amount: float = 10_000_000,
+) -> BacktestResult:
+    """모멘텀·평균회귀를 현금 하나로 함께 돌리는 최소 멀티 전략 백테스트 (국면 배분 검증용).
+
+    진입·청산 규칙은 run_backtest 와 같고, 실시간 엔진처럼 한 종목은 한 전략만 들고 전략마다 '배분 − 보유 평가금액' 안에서만 삽니다.
+    배분은 그날 평가자산 × weight 이고, 약세장에서는 allocation.regime_allocations 로 모멘텀 몫을 평균회귀로 옮깁니다.
+    (실시간 배분은 고정 금액이라 이익이 쌓이면 배분을 늘려야 같은 결과입니다.) 가치·뉴스 전략은 지원하지 않습니다.
+    """
+    from app.quant.allocation import regime_allocations
+
+    frames = {s: f for s, f in frames.items() if len(f) >= 80}
+    if not frames or benchmark.empty or not sleeves:
+        return BacktestResult(False, "백테스트에 쓸 시세가 부족합니다.")
+    if any(sl.template not in ("momentum", "meanrev") for sl in sleeves):
+        return BacktestResult(False, "포트폴리오 백테스트는 모멘텀·평균회귀만 지원합니다.")
+    end = benchmark.index[-1]
+    dates = benchmark.index[benchmark.index >= end - pd.Timedelta(days=int(years * 365))]
+    entries = [{s: entry_frame(sl.template, f) for s, f in frames.items()} for sl in sleeves]
+    books: list[dict[str, _Pos]] = [{} for _ in sleeves]
+    weak = weak_market(benchmark)
+    cash = float(amount)
+    equity_curve: list[float] = []
+    wins = losses = orders = 0
+
+    def px(sym: str, d: pd.Timestamp) -> float | None:
+        f = frames[sym]
+        if d not in f.index:
+            return None
+        v = float(f.at[d, "close"])
+        return v if v > 0 and not math.isnan(v) else None
+
+    def sell(book: dict[str, _Pos], sym: str, qty: int, close: float) -> None:
+        nonlocal cash, wins, losses, orders
+        p = book[sym]
+        qty = min(qty, p.qty)
+        proceeds = close * (1 - slippage_rate) * qty * (1 - fee_rate - sell_tax_rate)
+        cash += proceeds
+        p.pnl += proceeds - p.avg * qty * (1 + fee_rate)
+        p.qty -= qty
+        orders += 1
+        if p.qty <= 0:
+            wins += p.pnl > 0
+            losses += p.pnl <= 0
+            del book[sym]
+
+    for i, d in enumerate(dates):
+        for sl, book in zip(sleeves, books, strict=True):
+            budget = max_orders_per_day
+            for sym, p in list(book.items()):
+                close = px(sym, d)
+                if close is None or budget <= 0:
+                    continue
+                pnl = close / p.avg - 1
+                p.peak = max(p.peak, close)
+                reason = common_exit(pnl, p.stop, p.take, p.partial) or trailing_exit(p.trail, p.partial, close, p.peak) or template_exit(sl.template, frames[sym].loc[d], i - p.entry_i, pnl)
+                if reason:
+                    if reason == "take_profit":
+                        p.partial = True
+                    sell(book, sym, max(1, p.qty // 2) if reason == "take_profit" else p.qty, close)
+                    budget -= 1
+        mv = [sum((px(sym, d) or p.avg) * p.qty for sym, p in book.items()) for book in books]
+        equity = cash + sum(mv)
+        is_weak = bool(weak.get(d, False))
+        alloc = regime_allocations(((k, sl.template, equity * sl.weight) for k, sl in enumerate(sleeves)), is_weak, regime_shift)
+        held = {sym for book in books for sym in book}
+        for k, (sl, book, ef) in enumerate(zip(sleeves, books, entries, strict=True)):
+            size = WEAK_MARKET_SIZE.get(sl.template, 1.0) if is_weak else 1.0
+            cands = sorted(((float(f.at[d, "score"]), sym) for sym, f in ef.items() if sym not in held and d in f.index and bool(f.at[d, "entry"])), reverse=True)
+            budget = max_orders_per_day
+            for _score, sym in cands:
+                close = px(sym, d)
+                room = alloc[k] - mv[k]
+                if budget <= 0 or size <= 0 or room <= 0:
+                    break
+                if not close:
+                    continue
+                vol = vol_before(frames[sym], d)
+                levels = risk_levels(sl.template, sl.stop_pct, sl.take_pct, vol)
+                fill = close * (1 + slippage_rate)
+                value = min(alloc[k] * sl.max_weight_pct / 100 * levels.size_scale * size, room, cash)
+                qty = int(value / (fill * (1 + fee_rate)))
+                if qty <= 0:
+                    continue
+                cash -= fill * qty * (1 + fee_rate)
+                book[sym] = _Pos(qty, fill, i, levels.stop_pct, levels.take_pct, trailing_stop_pct(sl.template, sl.stop_pct, vol), close)
+                mv[k] += close * qty
+                held.add(sym)
+                orders += 1
+                budget -= 1
+        equity_curve.append(cash + sum(sum((px(sym, d) or p.avg) * p.qty for sym, p in book.items()) for book in books))
+    return _finish(equity_curve, dates, benchmark, amount, wins, losses, orders, None)
 
 
 def _value_picks(frames: dict[str, pd.DataFrame], d: pd.Timestamp, max_weight_pct: float) -> list[str]:
