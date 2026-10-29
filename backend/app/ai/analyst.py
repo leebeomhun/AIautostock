@@ -113,6 +113,8 @@ def fallback_summary(c: Candidate, stop_pct: float, take_pct: float) -> str:
         "time_exit": "정해 둔 보유 기간이 지났는데 기대한 흐름이 나오지 않아 정리 매도를 제안합니다.",
         "rebalance": "이번 분기 가치 순위에서 빠져 리밸런싱 매도를 제안합니다.",
         "rebalance_buy": "이번 분기 가치 순위 상위에 들어 목표 비중만큼 매수를 제안합니다.",
+        "ml_rebalance": "이번 주 ML 예측 순위 상위 종목에서 빠져 리밸런싱 매도를 제안합니다.",
+        "ml_rebalance_buy": "이번 주 ML 예측 순위 상위에 들어 목표 비중만큼 매수를 제안합니다.",
         "news": "뉴스·공시 분위기가 긍정적으로 바뀌고 거래가 늘어 매수를 제안합니다.",
     }
     return texts.get(c.reason, "퀀트 규칙 신호에 따라 주문을 제안합니다.")

@@ -94,6 +94,7 @@ def test_close_window_gates_momentum_entries(container, monkeypatch):
 
 def test_strategies_do_not_buy_the_same_symbol_in_one_tick(container):
     c = container
+    c.settings.enable_value_strategy = True  # 가치 전략은 기본 꺼짐
     add_strategy(c, template="value", exec_mode="approve")
     add_strategy(c, template="value", exec_mode="approve")
     c.engine.tick()

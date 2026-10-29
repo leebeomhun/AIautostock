@@ -216,7 +216,7 @@ export interface DecisionRow {
 }
 
 export interface TemplateDef {
-  id: 'momentum' | 'meanrev' | 'news' | 'value'
+  id: 'momentum' | 'meanrev' | 'news' | 'value' | 'ml_topn'
   name: string
   desc: string
   hold: string
@@ -224,6 +224,7 @@ export interface TemplateDef {
   risk: '높음' | '중간' | '낮음'
   version: string
   available: boolean
+  note?: string | null
 }
 
 export interface UniverseDef {

@@ -54,7 +54,31 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         "version": "v1.0",
         "model_id": "value-rebal",
     },
+    "ml_topn": {
+        "name": "ML 상위 주간 리밸런싱",
+        "desc": "야간 ML 예측 순위 상위 종목으로 매주 다시 맞춥니다",
+        "hold": "약 1주",
+        "freq": "주 1회",
+        "risk": "중간",
+        "version": "v0.1",
+        "model_id": "ml-topn",
+    },
 }
+# 기본으로 꺼 둔 전략: 템플릿 → (켜는 설정 이름, 꺼져 있을 때 안내). 꺼져 있으면 새로 만들 수 없고, 이미 있는 전략도 신규 매수를 하지 않습니다.
+TEMPLATE_FLAGS: dict[str, tuple[str, str]] = {
+    "ml_topn": ("enable_ml_topn_strategy", "실험용이라 꺼져 있습니다 · 과거 시점 ML 예측이 없어 백테스트할 수 없습니다 (ENABLE_ML_TOPN_STRATEGY)"),
+    "value": ("enable_value_strategy", "기본 꺼짐 · PER·PBR 과거 이력이 없어 백테스트를 가격 대용 지표로만 합니다 (ENABLE_VALUE_STRATEGY)"),
+}
+# 정해진 주기마다 목표 종목을 한 번에 다시 맞추는 전략 (분기 · 주)
+REBALANCE_TEMPLATES = ("value", "ml_topn")
+
+
+def template_flag_note(template: str, settings: Any) -> str | None:
+    """설정으로 꺼 둔 전략이면 안내 문구, 쓸 수 있으면 None."""
+    flag = TEMPLATE_FLAGS.get(template)
+    if flag is None or getattr(settings, flag[0], False):
+        return None
+    return flag[1]
 
 Z_SCORE_BOUND = 2.0
 # 돌파일 거래량 조건(20일 평균 대비 배수). 1.5 → 1.4 로 낮춘 쪽이 코스피 시총 상위 40·50·22종목 3년 백테스트에서
@@ -154,7 +178,7 @@ class Candidate:
     symbol: str
     name: str
     side: str  # buy | sell
-    reason: str  # breakout | meanrev_entry | meanrev_exit | trend_break | stop_loss | take_profit | trailing_stop | news | rebalance | time_exit
+    reason: str  # breakout | meanrev_entry | meanrev_exit | trend_break | stop_loss | take_profit | trailing_stop | news | rebalance | ml_rebalance | time_exit
     score: float
     signals: list[Signal]
     qty_fraction: float = 1.0
@@ -458,6 +482,9 @@ def describe_exit(
         score = 0.6
     elif reason == "time_exit":
         signals.append(Signal("time", "보유 기간 만료", _time_exit_detail(template, pnl), "sell", 0.55))
+        score = 0.55
+    elif reason == "ml_rebalance":
+        signals.append(Signal("rebalance", "ML 상위 제외", "이번 주 ML 예측 순위 상위 종목에서 빠졌습니다", "sell", 0.55))
         score = 0.55
     else:  # rebalance
         signals.append(Signal("rebalance", "리밸런싱 제외", "이번 분기 가치 순위에서 빠졌습니다", "sell", 0.55))

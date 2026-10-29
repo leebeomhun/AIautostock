@@ -215,7 +215,7 @@ export function StrategyNew() {
                     <span className={`small ${RISK_CLASS[t.risk]}`} style={{ fontWeight: 600, color: t.risk === '중간' ? 'var(--text-soft)' : undefined }}>위험도 {t.risk}</span>
                   </span>
                   <span className="muted" style={{ display: 'block', marginTop: 6, fontSize: 13 }}>{t.desc}</span>
-                  {!t.available && <span className="hint" style={{ display: 'block' }}>OPENAI_API_KEY 가 있어야 쓸 수 있습니다</span>}
+                  {!t.available && <span className="hint" style={{ display: 'block' }}>{t.note ?? '지금은 쓸 수 없습니다'}</span>}
                   <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
                     <span className="pill">보유 {t.hold}</span>
                     <span className="pill">매매 {t.freq}</span>

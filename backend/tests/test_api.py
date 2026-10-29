@@ -14,9 +14,9 @@ def test_dashboard_meta_and_backtest(settings, container):
         assert dash["loss"]["limit"] == 300_000
 
         meta = http.get("/api/strategies/meta").json()
-        assert {t["id"] for t in meta["templates"]} == {"momentum", "meanrev", "news", "value"}
+        assert {t["id"] for t in meta["templates"]} == {"momentum", "meanrev", "news", "value", "ml_topn"}
         news = next(t for t in meta["templates"] if t["id"] == "news")
-        assert news["available"] is False  # OpenAI 키 없음
+        assert news["available"] is False and "OPENAI_API_KEY" in news["note"]  # OpenAI 키 없음
 
         bt = http.post("/api/backtest", json={"template": "meanrev", "universe": "k200", "amount": 20_000_000, "stop_pct": 5, "take_pct": 10, "max_weight_pct": 15}).json()
         assert bt["ok"] and len(bt["curve"]) > 50 and bt["trades"] > 0

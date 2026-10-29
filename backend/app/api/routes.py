@@ -15,12 +15,12 @@ from app.db import now_kst, session_scope
 from app.market.universe import UNIVERSES, instrument, register, strategy_symbols, universe_symbols
 from app.models import Activity, Strategy
 from app.quant.backtest import BacktestParams, run_backtest
-from app.quant.signals import TEMPLATES, indicators
+from app.quant.signals import TEMPLATES, indicators, template_flag_note
 from app.trading.engine import EngineError
 
 router = APIRouter(prefix="/api")
 
-Template = Literal["momentum", "meanrev", "news", "value"]
+Template = Literal["momentum", "meanrev", "news", "value", "ml_topn"]
 Universe = Literal["k200", "kq150", "sp500", "custom"]
 Mode = Literal["notify", "approve", "auto"]
 
@@ -158,7 +158,7 @@ def strategies_meta(request: Request) -> dict:
         allocated = s.scalar(select(func.coalesce(func.sum(Strategy.allocation), 0)).where(Strategy.status != "stopped")) or 0
     return {
         **views.meta(c),
-        "templates": [{"id": k, **v, "available": not (k == "news" and not c.analyst.enabled)} for k, v in TEMPLATES.items()],
+        "templates": [_template_meta(c, k, v) for k, v in TEMPLATES.items()],
         "universes": universes,
         "pickable_symbols": pickable,
         "cash": settings["cash"],
@@ -169,6 +169,13 @@ def strategies_meta(request: Request) -> dict:
         "live_unlocked": settings["live_unlocked"],
         "defaults": {"daily_loss_limit": settings["daily_loss_limit"]},
     }
+
+
+def _template_meta(c: Container, key: str, tpl: dict) -> dict:
+    note = template_flag_note(key, c.settings)
+    if note is None and key == "news" and not c.analyst.enabled:
+        note = "OPENAI_API_KEY 가 있어야 쓸 수 있습니다"
+    return {"id": key, **tpl, "available": note is None, "note": note}
 
 
 class BacktestIn(BaseModel):
@@ -271,6 +278,9 @@ def create_strategy(c: Container, body: StrategyIn) -> dict:
         raise HTTPException(status_code=400, detail="키움 계좌는 국내 주식만 주문합니다")
     if body.template == "news" and not c.analyst.enabled:
         raise HTTPException(status_code=400, detail="AI 뉴스 감성 전략은 OPENAI_API_KEY 가 있어야 합니다")
+    flag_note = template_flag_note(body.template, c.settings)
+    if flag_note:
+        raise HTTPException(status_code=400, detail=f"{TEMPLATES[body.template]['name']} 전략은 {flag_note}")
     symbols = universe_symbols(body.universe, body.custom_symbols)
     if not symbols:
         raise HTTPException(status_code=400, detail="종목을 하나 이상 골라 주세요")
@@ -370,6 +380,12 @@ def put_settings(request: Request, body: SettingsIn) -> dict:
 PROFILE_TEMPLATE = {"conservative": "value", "neutral": "meanrev", "aggressive": "momentum"}
 
 
+def profile_template(c: Container, profile: str) -> str:
+    """투자 성향별 추천 전략. 설정으로 꺼 둔 전략(가치 등)이면 평균회귀로 시작합니다."""
+    template = PROFILE_TEMPLATE.get(profile, "meanrev")
+    return "meanrev" if template_flag_note(template, c.settings) else template
+
+
 @router.post("/onboarding/complete")
 def complete_onboarding(request: Request) -> dict:
     c = container(request)
@@ -385,7 +401,7 @@ def complete_onboarding(request: Request) -> dict:
         create_strategy(
             c,
             StrategyIn(
-                template=PROFILE_TEMPLATE.get(profile, "meanrev"),
+                template=profile_template(c, profile),
                 universe="k200",
                 amount=amount,
                 stop_pct=5,

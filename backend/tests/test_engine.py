@@ -122,6 +122,7 @@ def test_live_account_is_notify_only_until_confirmed(container):
 
 def test_value_rebalance_creates_pending_then_auto_executes(container):
     c = container
+    c.settings.enable_value_strategy = True  # 가치 전략은 기본 꺼짐
     add_strategy(c, template="value", exec_mode="approve")
     c.engine.tick()
     with session_scope(c.session_factory) as s:

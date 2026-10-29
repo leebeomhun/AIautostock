@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     # ML 라벨 보유 기간(거래일). 전략 보유 기간(3–10일)에 맞춘 기본값입니다.
     ml_label_horizon: int = 5
 
+    # 기본으로 꺼 둔 전략 (프로덕션에서 켜지 않습니다). 꺼져 있으면 새로 만들 수 없고 있는 전략도 신규 매수를 하지 않습니다.
+    # ML 상위 주간 리밸런싱: 과거 ML 예측이 없어 백테스트 불가 · 검증 IC 통과 때만 리밸런싱
+    enable_ml_topn_strategy: bool = False
+    ml_topn_size: int = 10
+    # 배당·가치 리밸런싱: PER·PBR 과거 이력이 없어 백테스트가 가격 대용 지표뿐
+    enable_value_strategy: bool = False
+
     # 배치 결과(ML 점수·심층 리서치)를 읽는 폴더
     data_dir: Path = BACKEND_DIR / "data"
 

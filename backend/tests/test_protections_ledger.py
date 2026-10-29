@@ -75,6 +75,7 @@ def test_research_and_ml_add_signals(container, tmp_path):
     assert sig_w.side == "neutral" and adj_w == 0.0 and "참고만" in sig_w.detail
 
     c.engine.insights = ins
+    c.settings.enable_value_strategy = True  # 가치 전략은 기본 꺼짐
     add_strategy(c, template="value")
     c.engine.tick()
     with session_scope(c.session_factory) as s:

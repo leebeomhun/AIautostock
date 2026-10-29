@@ -87,6 +87,8 @@ class _Pos:
 def run_backtest(params: BacktestParams, frames: dict[str, pd.DataFrame], benchmark: pd.Series) -> BacktestResult:
     if params.template == "news":
         return BacktestResult(False, "과거 시점의 뉴스 데이터가 없어 AI 뉴스 감성 전략은 백테스트하지 않습니다. 모의투자로 먼저 확인해 보세요.")
+    if params.template == "ml_topn":
+        return BacktestResult(False, "과거 시점의 ML 예측 순위가 없어 ML 상위 리밸런싱 전략은 백테스트하지 않습니다.")
     frames = {s: f for s, f in frames.items() if len(f) >= 80}
     if not frames or benchmark.empty:
         return BacktestResult(False, "백테스트에 쓸 시세가 부족합니다.")

@@ -33,6 +33,7 @@ from app.quant.allocation import regime_allocations
 from app.quant.signals import (
     CLOSE_WINDOW_TEMPLATES,
     NEWS_VOLATILITY_PAUSE,
+    REBALANCE_TEMPLATES,
     TEMPLATES,
     WEAK_MARKET_MA,
     WEAK_MARKET_SIZE,
@@ -51,6 +52,7 @@ from app.quant.signals import (
     risk_levels,
     sector_full,
     signal_history,
+    template_flag_note,
     template_exit,
     trailing_exit,
     trailing_stop_pct,
@@ -337,7 +339,9 @@ class TradingEngine:
                 prepared.extend(
                     self._prepare_strategy(
                         s, st, strat, acct, loss, bench_ret1, bench_vol, now, budget,
-                        allow_entries=strat.status == "running", market_weak=market_weak, allocation=allocations.get(strat.id),
+                        # 설정으로 꺼 둔 전략(TEMPLATE_FLAGS)은 보유 종목 손절·익절만 관리합니다.
+                        allow_entries=strat.status == "running" and template_flag_note(strat.template, self.settings) is None,
+                        market_weak=market_weak, allocation=allocations.get(strat.id),
                     )
                 )
                 s.commit()
@@ -487,6 +491,16 @@ class TradingEngine:
         rebalance_drop: set[str] = set()
         rebalance_picks: list[tuple[str, list[Signal]]] = []
         quarter = f"{now.year}-Q{(now.month - 1) // 3 + 1}"
+        week = f"{now.isocalendar().year}-W{now.isocalendar().week:02d}"
+        period = week if strat.template == "ml_topn" else quarter
+        ml_why: str | None = None
+        if allow_entries and strat.template == "ml_topn" and strat.last_rebalanced != week:
+            picks_ml, ml_why = self._ml_topn_picks(symbols, now)
+            if picks_ml is not None:
+                rebalance_drop = {p.symbol for p in positions if p.symbol not in {sym for sym, _ in picks_ml}}
+                rebalance_picks = picks_ml
+            else:
+                self._guard_activity(s, f"{strat.name} 리밸런싱 보류", ml_why or "", now)
         if allow_entries and strat.template == "value" and strat.last_rebalanced != quarter:
             fundamentals = {}
             for sym in frames:
@@ -521,7 +535,7 @@ class TradingEngine:
             if reason is None and strat.template != "value" and close_ok:
                 reason = trailing_exit(trail, pos.partial_taken, price, peak) or template_exit(strat.template, row, hold_days, pnl)
             if reason is None and pos.symbol in rebalance_drop:
-                reason = "rebalance"
+                reason = "ml_rebalance" if strat.template == "ml_topn" else "rebalance"
             if reason is None:
                 if pos.ai_note in ("손절 제안 · 승인 대기", "매도 제안 · 승인 대기"):
                     pos.ai_note, pos.ai_note_tone = "보유 유지", "info"
@@ -599,11 +613,12 @@ class TradingEngine:
                         Signal("move", "당일 가격 변화", f"오늘 {pct(row['ret1'])} (평소 하루 변동의 {row['ret1'] / max(daily_sigma, 1e-6):.1f}배)", "buy", clamp(row["ret1"] / (4 * max(daily_sigma, 1e-6)))),
                     ]
                     entries.append(Candidate(sym, instrument(sym).name, "buy", "news", 0.5, signals, metrics={"ret1": round(float(row["ret1"]), 4), "vol_ratio": round(float(row["vol_ratio"]), 2)}))
-        elif strat.template == "value":
+        elif strat.template in REBALANCE_TEMPLATES:
+            buy_reason = "ml_rebalance_buy" if strat.template == "ml_topn" else "rebalance_buy"
             for sym, signals in rebalance_picks:
                 if sym in held or sym in budget.claimed:
                     continue
-                entries.append(Candidate(sym, instrument(sym).name, "buy", "rebalance_buy", 0.6, signals))
+                entries.append(Candidate(sym, instrument(sym).name, "buy", buy_reason, 0.6, signals))
         # 심층 리서치가 약세(Underweight·Sell)인 종목도 막지 않고, 점수를 깎아 뒤로 보내고 아래에서 적게 삽니다.
         # ML 순위 보정(예측력이 검증된 경우만)도 정렬 전에 반영해, 같은 주기 진입 수가 모자랄 때 상위 종목이 먼저 들어갑니다.
         # 모멘텀은 기관·외국인 동반 연속 순매수(키움 ka10131)도 작은 점수 가산으로만 씁니다 (진입 조건 아님).
@@ -628,7 +643,7 @@ class TradingEngine:
             self._guard_activity(s, f"시장 약세 · {strat.name} 신규 매수 쉼", f"KOSPI가 {WEAK_MARKET_MA}일 이동평균 아래입니다", now)
             return out
         # 같은 업종은 MAX_POSITIONS_PER_SECTOR 종목까지만 들고 있습니다 (0 이면 제한 없음, 리밸런싱은 가치 순위를 그대로 따릅니다).
-        sector_limit = self.settings.max_positions_per_sector if strat.template != "value" else 0
+        sector_limit = self.settings.max_positions_per_sector if strat.template not in REBALANCE_TEMPLATES else 0
         sector_counts: dict[str, int] = {}
         for p in positions:
             sec = instrument(p.symbol).sector
@@ -636,7 +651,7 @@ class TradingEngine:
 
         taken = 0
         # 리밸런싱은 목표 종목을 한 번에 제안하고, 나머지 전략은 주기당 진입 수를 제한합니다.
-        max_entries = len(entries) if strat.template == "value" else MAX_ENTRIES_PER_TICK
+        max_entries = len(entries) if strat.template in REBALANCE_TEMPLATES else MAX_ENTRIES_PER_TICK
         for cand in entries:
             if taken >= max_entries:
                 break
@@ -691,7 +706,7 @@ class TradingEngine:
                     stop_pct=levels.stop_pct,
                     take_pct=levels.take_pct,
                     needs_news=cand.reason == "news",
-                    extra={"max_qty": chk.qty, "quarter": quarter if strat.template == "value" else None},
+                    extra={"max_qty": chk.qty, "quarter": period if strat.template in REBALANCE_TEMPLATES else None},
                 )
             )
             invested += chk.qty * price
@@ -703,7 +718,28 @@ class TradingEngine:
         if strat.template == "value" and strat.last_rebalanced != quarter:
             strat.last_rebalanced = quarter
             self._activity(s, "strategy", f"{strat.name} {quarter} 리밸런싱", f"가치 순위 상위 {len(rebalance_picks)}종목 기준으로 매수 {taken}건 · 매도 {len(rebalance_drop)}건을 제안합니다")
+        elif strat.template == "ml_topn" and allow_entries and rebalance_picks and strat.last_rebalanced != week:
+            strat.last_rebalanced = week
+            self._activity(s, "strategy", f"{strat.name} {week} 리밸런싱", f"ML 예측 순위 상위 {len(rebalance_picks)}종목 기준으로 매수 {taken}건 · 매도 {len(rebalance_drop)}건을 제안합니다")
         return out
+
+    def _ml_topn_picks(self, symbols: list[str], now: datetime) -> tuple[list[tuple[str, list[Signal]]] | None, str | None]:
+        """ML 상위 리밸런싱 대상 (종목 범위 안 예측 순위 상위 ML_TOPN_SIZE). ML 이 없거나 오래됐거나 검증을 못 넘으면 (None, 이유)."""
+        if not self.insights:
+            return None, "ML 결과를 읽을 수 없습니다"
+        status = self.insights.ml_status()
+        if not status or not self.insights._fresh(status.get("as_of"), self.insights.ml_max_age_days, now.date()):  # noqa: SLF001
+            return None, "최근 ML 결과가 없어 리밸런싱하지 않습니다"
+        metrics = status.get("metrics") or {}
+        ok, why = self.insights.ml_gate(metrics.get("valid_rank_ic"), metrics.get("fold_rank_ics"))
+        if not ok:
+            return None, f"ML 예측력 검증 미달 · {why}"
+        rows = sorted(((row["rank"], sym, row) for sym in symbols if (row := self.insights.ml_for(sym, now.date()))), key=lambda x: x[0])
+        picks = []
+        for rank, sym, row in rows[: max(1, self.settings.ml_topn_size)]:
+            detail = f"{row['count']}종목 중 {rank}위 (상위 {row['pct'] * 100:.0f}%) · {row['as_of']} 기준 · {why}"
+            picks.append((sym, [Signal("ml", "ML 랭킹 (qlib)", detail, "buy", clamp(1 - row["pct"]))]))
+        return (picks or None), (None if picks else "종목 범위 안에 ML 점수가 있는 종목이 없습니다")
 
     def _attach_insights(self, cand: Candidate, now: datetime) -> None:
         """배치가 만든 ML 순위·심층 리서치 의견을 근거 시그널로 붙입니다 (뉴스 항목 앞)."""
@@ -978,7 +1014,7 @@ class TradingEngine:
             self._ledger(s, "decision.expired", d.id, {"expires_at": d.expires_at}, now)
             self._activity(s, "system", f"{d.name} {'매수' if d.side == 'buy' else '매도'} 제안 자동 취소", "승인 시간이 지나 주문하지 않았습니다", d.id)
             self._reset_note(s, d)
-            if d.reason in ("rebalance", "rebalance_buy"):
+            if d.reason in ("rebalance", "rebalance_buy", "ml_rebalance", "ml_rebalance_buy"):
                 # 응답이 없어 놓친 리밸런싱은 다음 거래일에 다시 제안합니다.
                 strat = s.get(Strategy, d.strategy_id)
                 if strat:
