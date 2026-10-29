@@ -28,7 +28,9 @@ def test_onboarding_creates_default_strategy(settings, container):
         res = http.post("/api/onboarding/complete").json()
         assert res["onboarded"] and res["has_strategy"]
         strategies = http.get("/api/strategies").json()
-        assert strategies[0]["template"] == "meanrev" and strategies[0]["exec_mode"] == "approve"
+        # 모의투자는 전략 기본이 완전 자동이지만, 계좌 실행 방식(기본 승인 후 주문)이 더 낮아 실제로는 승인 후 주문입니다.
+        assert strategies[0]["template"] == "meanrev" and strategies[0]["exec_mode"] == "auto"
+        assert res["mode"] == "approve"
 
 
 def test_mode_and_kill_switch(settings, container):

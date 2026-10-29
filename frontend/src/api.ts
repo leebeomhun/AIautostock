@@ -142,13 +142,15 @@ export interface DecisionDetail extends Meta {
   summary: string
   caution: string
   signals: SignalItem[]
-  history_stat: { count: number; hit_rate: number; horizon: number; side: Side } | null
+  history_stat: { count: number; hit_rate: number; horizon: number; side: Side; avg_return?: number } | null
   chart: {
     dates: string[]
     closes: number[]
     avg?: number
     stop?: number
     take?: number
+    stop_pct?: number
+    take_pct?: number
     high20?: number
     news?: { title: string; source: string; url: string; sentiment: number }[]
   } | null
@@ -294,7 +296,15 @@ export interface Report {
   metrics: { total_return: number | null; volatility: number | null; max_drawdown: number | null; sharpe: number | null; bench_return: number | null }
   trades: { count: number; wins: number; win_rate: number | null; realized: number; best: number | null; worst: number | null; avg: number | null }
   by_strategy: { name: string; realized: number; trades: number; wins: number }[]
+  ai_review: { horizon: number; buy: AiReviewSide; sell: AiReviewSide }
   performance: Performance
+}
+
+export interface AiReviewSide {
+  followed: { count: number; avg_return: number | null }
+  held: { count: number; avg_return: number | null }
+  /** 매수: 낸 쪽 − 보류 쪽, 매도: 보류 쪽 − 낸 쪽 (%p). 양수면 AI 판단이 도움이 됐습니다. */
+  edge: number | null
 }
 
 export const AUTH_EVENT = 'autostock:auth-required'

@@ -44,7 +44,7 @@ class Strategy(Base):
     max_weight_pct: Mapped[float] = mapped_column(Float, default=15)
     daily_loss_limit: Mapped[int] = mapped_column(Integer, default=300_000)
     max_orders_per_day: Mapped[int] = mapped_column(Integer, default=20)
-    exec_mode: Mapped[str] = mapped_column(String(10), default="approve")
+    exec_mode: Mapped[str] = mapped_column(String(10), default="approve")  # 새 전략은 api.routes.default_exec_mode 로 정합니다 (모의 auto · 실거래 approve)
     status: Mapped[str] = mapped_column(String(10), default="running")  # running | paused | stopped
     pause_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
     paused_auto: Mapped[bool] = mapped_column(Boolean, default=False)

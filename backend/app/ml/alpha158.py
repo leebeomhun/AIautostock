@@ -101,7 +101,10 @@ def features(df: pd.DataFrame) -> pd.DataFrame:
     return out.replace([np.inf, -np.inf], np.nan)
 
 
-def label(df: pd.DataFrame) -> pd.Series:
-    """qlib Alpha158 라벨: 다음 거래일 종가 대비 그다음 거래일 종가 수익률 (신호 다음 날 진입 가정)."""
+def label(df: pd.DataFrame, horizon: int = 1) -> pd.Series:
+    """qlib Alpha158 라벨(horizon=1: 다음 거래일 종가 대비 그다음 거래일 종가)을 보유 기간만큼 늘린 수익률.
+
+    신호 다음 날 종가에 진입해 horizon 거래일 보유한다고 가정합니다.
+    """
     c = df["close"].astype(float)
-    return c.shift(-2) / c.shift(-1) - 1
+    return c.shift(-1 - horizon) / c.shift(-1) - 1

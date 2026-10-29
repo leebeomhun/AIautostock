@@ -3,7 +3,7 @@
 대상: AI가 보유 중인 종목 + 전날 ML 순위 상위 종목 (최대 RESEARCH_MAX_SYMBOLS 개).
 실행: `uv run python -m app.research.daily [--symbols 005930,000660] [--force]`
 결과: data/research/<날짜>/<종목>.md 와 data/research/latest.json — 엔진이 근거 시그널로 읽고,
-Underweight·Sell 종목은 신규 매수를 막습니다.
+Underweight·Sell 종목은 신규 매수 점수를 깎고 매수 금액을 줄입니다 (Sell 이 더 크게).
 """
 
 from __future__ import annotations

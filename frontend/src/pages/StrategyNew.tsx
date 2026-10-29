@@ -9,8 +9,8 @@ import { useAction } from '../hooks'
 const RISK_CLASS: Record<TemplateDef['risk'], string> = { 높음: 'warn', 중간: '', 낮음: 'accent' }
 const EXECS: { id: Mode; label: string; badge?: string; desc: string }[] = [
   { id: 'notify', label: '알림만', desc: '신호만 받고 주문은 직접 냅니다' },
-  { id: 'approve', label: '승인 후 주문', badge: '추천', desc: 'AI가 주문을 제안하면 내가 승인합니다' },
-  { id: 'auto', label: '완전 자동', desc: '한도 안에서 AI가 바로 주문합니다' },
+  { id: 'approve', label: '승인 후 주문', badge: '실거래 기본', desc: 'AI가 주문을 제안하면 내가 승인합니다' },
+  { id: 'auto', label: '완전 자동', badge: '모의 기본', desc: '한도 안에서 AI가 바로 주문합니다' },
 ]
 
 function Section({ id, n, title, children, sub }: { id: string; n: number; title: string; sub?: string; children: React.ReactNode }) {
@@ -122,6 +122,7 @@ export function StrategyNew() {
   const [weight, setWeight] = useState(15)
   const [loss, setLoss] = useState('300,000')
   const [orders, setOrders] = useState('20')
+  // 모의투자는 완전 자동, 실거래는 승인 후 주문이 기본입니다 (불러온 뒤 계좌 종류로 정함).
   const [exec, setExec] = useState<Mode>('approve')
   const [bt, setBt] = useState<BacktestResult | null>(null)
   const [btLoading, setBtLoading] = useState(false)
@@ -131,6 +132,7 @@ export function StrategyNew() {
     api.strategiesMeta().then(
       (m) => {
         setMeta(m)
+        setExec(m.broker.is_live ? 'approve' : 'auto')
         setAmount(formatAmountInput(String(Math.min(20_000_000, Math.floor(m.cash ?? 0)))))
         setLoss(formatAmountInput(String(m.defaults.daily_loss_limit)))
       },

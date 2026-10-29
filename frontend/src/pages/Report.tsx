@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api } from '../api'
+import { api, type AiReviewSide } from '../api'
 import { LineChart } from '../components/Charts'
 import { PageError } from '../components/Shell'
 import { signedPct, signedWon, trendClass } from '../format'
@@ -11,6 +11,21 @@ const PERIODS = [
   { id: '3m', label: '3개월' },
   { id: '1y', label: '1년' },
 ]
+
+function ReviewRow({ label, side, r }: { label: string; side: 'buy' | 'sell'; r: AiReviewSide }) {
+  const cell = (x: { count: number; avg_return: number | null }) => (
+    <span className={`mono ${trendClass(x.avg_return)}`}>{x.count ? `${signedPct(x.avg_return, 1)} · ${x.count}건` : '—'}</span>
+  )
+  return (
+    <tr>
+      <td>{label}</td>
+      <td className="num">{cell(r.followed)}</td>
+      <td className="num">{cell(r.held)}</td>
+      <td className={`num mono ${trendClass(r.edge)}`}>{r.edge == null ? '—' : `${signedPct(r.edge, 1).replace('%', '%p')}`}</td>
+      <td className="xs dim">{side === 'buy' ? '낸 매수가 보류한 매수보다 더 올랐으면 +' : '보류한 매도가 낸 매도보다 더 올랐으면 +'}</td>
+    </tr>
+  )
+}
 
 function Metric({ label, value, cls = '', foot }: { label: string; value: string; cls?: string; foot?: string }) {
   return (
@@ -94,6 +109,21 @@ export function Report() {
               )}
             </section>
           </div>
+          <section className="card" aria-labelledby="rep-ai-h">
+            <h2 id="rep-ai-h">AI 판단 점검 · 신호 후 {data.ai_review.horizon}거래일 등락</h2>
+            <p className="xs dim" style={{ margin: '0 0 10px' }}>
+              퀀트 규칙이 낸 후보 중 AI가 그대로 낸 것과 보류한 것의 이후 등락을 비교합니다. 규칙 기반 설명과 손절은 뺐고, {data.ai_review.horizon}거래일이 지난 판단만 셉니다.
+            </p>
+            <div className="table-wrap">
+              <table className="data" style={{ minWidth: 560 }}>
+                <thead><tr><th scope="col">구분</th><th scope="col" className="num">AI가 낸 판단</th><th scope="col" className="num">AI가 보류한 판단</th><th scope="col" className="num">차이</th><th scope="col">읽는 법</th></tr></thead>
+                <tbody>
+                  <ReviewRow label="매수" side="buy" r={data.ai_review.buy} />
+                  <ReviewRow label="매도" side="sell" r={data.ai_review.sell} />
+                </tbody>
+              </table>
+            </div>
+          </section>
         </>
       )}
       <p className="disclaimer">지표 정의는 gs-quant 시계열 함수(volatility, max_drawdown, sharpe)와 같습니다. 과거 성과는 미래 수익을 보장하지 않습니다.</p>

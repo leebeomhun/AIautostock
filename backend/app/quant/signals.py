@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import numpy as np
@@ -59,6 +60,21 @@ Z_SCORE_BOUND = 2.0
 BREAKOUT_VOLUME_RATIO = 1.5
 NEWS_VOLATILITY_PAUSE = 28.0  # 시장 20일 변동성(연환산 %)이 이 값을 넘으면 뉴스 전략을 멈춥니다
 NEWS_MAX_HOLD_DAYS = 3
+# 보유 기간 청산: (거래일, 최소 수익률). 그 기간이 지나도 수익률이 기준 미만이면 정리하고, None 이면 무조건 정리합니다.
+# 모멘텀은 무조건 정리하면 강하게 오르는 종목까지 잘라 최근 1–2년 성과가 나빠져서, 오르지 못한 종목만 정리합니다.
+# 평균회귀는 보유 기간 청산을 넣으면 백테스트 성과가 나빠져 넣지 않았습니다.
+TIME_EXITS: dict[str, tuple[int, float | None]] = {"momentum": (10, 0.03), "news": (NEWS_MAX_HOLD_DAYS, None)}
+# 장 마감 무렵에만 진입·전략 청산을 판단하는 전략. 백테스트와 같은 시점(종가)에 맞춥니다.
+CLOSE_WINDOW_TEMPLATES = ("momentum", "meanrev")
+# 변동성에 맞춰 손절폭과 매수 비중을 정하는 전략. 모멘텀은 변동성 큰 주도주 비중이 줄어 성과가 나빠져 빼 두었습니다.
+VOL_STOP_TEMPLATES = ("meanrev",)
+# 손절폭 = 진입 전날 20일 일간 변동성 × 이 배수. 설정 손절 %보다 좁아지지 않고 그 2배를 넘지 않습니다.
+STOP_VOL_MULT = 2.5
+# 정규장(09:00–15:30) 시작 후 분 → 하루 거래량 중 그때까지 체결됐을 누적 비율 (대략값).
+# 장 초반과 종가 동시호가(15:20–15:30)에 거래가 몰리는 U자형이라 단순 시간 비율보다 오전 비율이 큽니다.
+INTRADAY_VOLUME_CURVE = ((0, 0.0), (30, 0.17), (60, 0.27), (120, 0.41), (180, 0.52), (240, 0.62), (300, 0.73), (360, 0.86), (380, 0.9), (390, 1.0))
+# 장 시작 직후 몇 분치 거래량을 하루치로 크게 부풀리지 않도록 환산 비율의 하한을 둡니다.
+MIN_VOLUME_FRACTION = 0.1
 
 
 def clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -147,6 +163,39 @@ def indicators(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def session_volume_fraction(now: datetime) -> float:
+    """정규장 중 now 까지 하루 거래량의 몇 %가 체결됐을지 (INTRADAY_VOLUME_CURVE 보간). 장 시작 전·마감 뒤는 1."""
+    minutes = now.hour * 60 + now.minute + now.second / 60 - 9 * 60
+    if minutes <= 0 or minutes >= 390:
+        return 1.0
+    for (m0, f0), (m1, f1) in zip(INTRADAY_VOLUME_CURVE, INTRADAY_VOLUME_CURVE[1:]):
+        if minutes <= m1:
+            return max(MIN_VOLUME_FRACTION, f0 + (f1 - f0) * (minutes - m0) / (m1 - m0))
+    return 1.0
+
+
+def project_partial_bar(ind: pd.DataFrame, now: datetime) -> pd.DataFrame:
+    """장중 미완성 봉(오늘 날짜의 마지막 행)의 거래량 비율을 하루치로 환산합니다.
+
+    vol_ratio 는 '오늘 누적 거래량 / 직전 20일 평균'이라 장 초반에는 거래량 1.5배 조건을 거의 넘지 못합니다.
+    지금까지 체결됐을 비율로 나눠 하루치로 늘리면 백테스트(완성 봉)와 같은 기준으로 비교할 수 있습니다.
+    모멘텀·평균회귀 진입은 지금 15:00–15:20(CLOSE_WINDOW)에만 판단하는데, 그때도 하루 거래량의 85–90%만 쌓여
+    있어 환산하지 않으면 백테스트보다 조금 엄격합니다. 장중 신호(뉴스 전략, 구간 설정을 비운 경우)는 이 환산이 없으면
+    오전에 신호가 거의 나지 않습니다.
+    """
+    fraction = session_volume_fraction(now)
+    if fraction >= 1 or ind.empty or ind.index[-1].date() != now.date():
+        return ind
+    out = ind.copy()
+    i = out.index[-1]
+    projected = float(out.at[i, "volume"]) / fraction
+    out.at[i, "vol_ratio"] = projected / out.at[i, "vol_avg20_prev"]
+    out.at[i, "vol_change5"] = projected / out.at[i, "vol_avg5_prev"] - 1
+    out["vol_fraction"] = 1.0
+    out.at[i, "vol_fraction"] = fraction
+    return out
+
+
 def entry_frame(template: str, ind: pd.DataFrame) -> pd.DataFrame:
     """진입 여부(entry)와 퀀트 점수(score, 0–1)를 날짜별로 계산합니다."""
     c = ind["close"]
@@ -172,18 +221,19 @@ def entry_frame(template: str, ind: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame({"entry": entry.fillna(False).astype(bool), "score": pd.Series(score, index=ind.index).fillna(0)})
 
 
-def template_exit(template: str, row: pd.Series, prev: pd.Series | None, hold_days: int) -> str | None:
+def template_exit(template: str, row: pd.Series, hold_days: int, pnl_pct: float) -> str | None:
     """보유 중 전략 고유 청산 조건. 손절·익절은 common_exit 에서 따로 봅니다."""
     if template == "momentum":
-        if row["close"] < row["ma20"] and (prev is None or prev["close"] >= prev["ma20"]):
+        # 이탈한 날 하루만 보면 그날 판단을 보류·거절했을 때 다시는 청산 신호가 나지 않습니다.
+        if row["close"] < row["ma20"]:
             return "trend_break"
     elif template == "meanrev":
         # gs-quant MeanReversionTrigger: 롱 포지션은 가격이 롤링 평균 위로 올라오면 청산
         if row["close"] >= row["ma20"] and hold_days >= 1:
             return "meanrev_exit"
-    elif template == "news":
-        if hold_days >= NEWS_MAX_HOLD_DAYS:
-            return "time_exit"
+    days, min_pnl = TIME_EXITS.get(template, (0, None))
+    if days and hold_days >= days and (min_pnl is None or pnl_pct < min_pnl):
+        return "time_exit"
     return None
 
 
@@ -193,6 +243,38 @@ def common_exit(pnl_pct: float, stop_pct: float, take_pct: float, partial_taken:
     if pnl_pct >= take_pct / 100 and not partial_taken:
         return "take_profit"
     return None
+
+
+@dataclass
+class RiskLevels:
+    stop_pct: float
+    take_pct: float
+    size_scale: float  # 종목 비중 한도에 곱하는 값 (0.5–1)
+
+    @property
+    def widened(self) -> bool:
+        return self.size_scale < 0.999
+
+
+def risk_levels(template: str, stop_pct: float, take_pct: float, vol20_prev: float | None) -> RiskLevels:
+    """변동성에 맞춘 손절·익절폭과 매수 비중.
+
+    변동성이 큰 종목은 손절폭을 넓히고(설정값의 최대 2배) 그만큼 적게 삽니다.
+    그래서 한 번 손절로 잃는 돈은 갭 하락이 아니면 어느 종목이든 '배분 × 종목 비중 × 설정 손절 %' 안쪽입니다.
+    vol20_prev 는 진입 전날 20일 변동성(연환산 %)으로, 진입 후에도 바뀌지 않게 날짜로 고정해 씁니다.
+    """
+    if template not in VOL_STOP_TEMPLATES or vol20_prev is None or math.isnan(vol20_prev) or vol20_prev <= 0:
+        return RiskLevels(stop_pct, take_pct, 1.0)
+    daily = vol20_prev / math.sqrt(252)
+    stop = min(stop_pct * 2, max(stop_pct, STOP_VOL_MULT * daily))
+    k = stop / stop_pct
+    return RiskLevels(round(stop, 2), round(take_pct * k, 2), round(1 / k, 4))
+
+
+def vol_before(ind: pd.DataFrame, day: pd.Timestamp) -> float | None:
+    """day 전 거래일의 20일 변동성. 장중의 미완성 봉이나 진입 이후 값은 쓰지 않습니다."""
+    past = ind["vol20"][ind.index < pd.Timestamp(day).normalize()]
+    return float(past.iloc[-1]) if len(past) else None
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +307,7 @@ def describe_entry(template: str, symbol: str, name: str, ind: pd.DataFrame, ben
     if template == "momentum":
         margin = row["close"] / row["high20_prev"] - 1
         signals.append(Signal("breakout", "20일 고점 돌파", f"직전 20일 고점 {row['high20_prev']:,.0f}원보다 {pct(margin)}", "buy", 0.5 + clamp(margin / 0.03) * 0.5))
-        signals.append(Signal("volume", "거래량 증가", f"20일 평균 대비 {row['vol_ratio']:.1f}배", "buy", clamp((row["vol_ratio"] - 1) / 2)))
+        signals.append(Signal("volume", "거래량 증가", f"20일 평균 대비 {row['vol_ratio']:.1f}배{_partial_note(row)}", "buy", clamp((row["vol_ratio"] - 1) / 2)))
         signals.append(Signal("trend", "중기 추세", f"60일 이동평균보다 {pct(row['close'] / row['ma60'] - 1)} 위", "buy", clamp((row["close"] / row["ma60"] - 1) / 0.1)))
         rsi = row["rsi14"]
         if rsi >= 70:
@@ -262,6 +344,7 @@ def describe_exit(
     stop_pct: float,
     take_pct: float,
     bench_ret1: float | None,
+    template: str | None = None,
 ) -> Candidate:
     row = ind.iloc[-1]
     pnl = price / avg_price - 1 if avg_price else 0.0
@@ -284,7 +367,7 @@ def describe_exit(
         signals.append(Signal("mean", "평균 회귀 완료", f"20일 평균 {row['ma20']:,.0f}원까지 회복 · 평가손익 {pct(pnl)}", "sell", 0.65))
         score = 0.6
     elif reason == "time_exit":
-        signals.append(Signal("time", "보유 기간 만료", f"뉴스 전략 최대 보유 {NEWS_MAX_HOLD_DAYS}거래일 도달 · 평가손익 {pct(pnl)}", "sell", 0.55))
+        signals.append(Signal("time", "보유 기간 만료", _time_exit_detail(template, pnl), "sell", 0.55))
         score = 0.55
     else:  # rebalance
         signals.append(Signal("rebalance", "리밸런싱 제외", "이번 분기 가치 순위에서 빠졌습니다", "sell", 0.55))
@@ -312,6 +395,18 @@ def describe_exit(
     signals.append(_news_placeholder())
     metrics = _metrics(row) | {"pnl_pct": round(pnl * 100, 2), "avg_price": avg_price}
     return Candidate(symbol, name, "sell", reason, score, signals, qty_fraction, mandatory, metrics)
+
+
+def _partial_note(row: pd.Series) -> str:
+    fraction = row.get("vol_fraction", 1.0)
+    return "" if fraction >= 1 else f" (장중 거래량을 하루치로 환산 · 지금까지 약 {fraction * 100:.0f}% 체결 가정)"
+
+
+def _time_exit_detail(template: str | None, pnl: float) -> str:
+    days, min_pnl = TIME_EXITS.get(template or "news", (NEWS_MAX_HOLD_DAYS, None))
+    if min_pnl is None:
+        return f"최대 보유 {days}거래일 도달 · 평가손익 {pct(pnl)}"
+    return f"{days}거래일 보유했지만 수익 {pct(pnl)}로 기준 {pct(min_pnl)} 미만 · 흐름이 이어지지 않아 정리"
 
 
 def _metrics(row: pd.Series) -> dict[str, Any]:
@@ -380,8 +475,16 @@ def _reason_mask(reason: str, ind: pd.DataFrame, stop_pct: float, take_pct: floa
     return None
 
 
-def signal_history(reason: str, frames: dict[str, pd.DataFrame], stop_pct: float, take_pct: float, horizon: int = 5) -> dict[str, Any] | None:
+def signal_history(
+    reason: str, frames: dict[str, pd.DataFrame], stop_pct: float, take_pct: float, horizon: int = 5, round_trip_cost: float = 0.0
+) -> dict[str, Any] | None:
+    """비슷한 신호 뒤 horizon 거래일 동안의 방향 적중률과 평균 수익률(%).
+
+    매수 신호의 평균 수익률은 왕복 비용(수수료·세금·슬리피지)을 뺀 값이고,
+    매도 신호는 팔지 않고 계속 보유했을 때의 평균 등락입니다.
+    """
     total = hits = 0
+    fwd_sum = 0.0
     side = "buy"
     for ind in frames.values():
         spec = _reason_mask(reason, ind, stop_pct, take_pct)
@@ -394,7 +497,9 @@ def signal_history(reason: str, frames: dict[str, pd.DataFrame], stop_pct: float
         if not n:
             continue
         total += n
+        fwd_sum += float(fwd[valid].sum())
         hits += int(((fwd[valid] > 0) if side == "buy" else (fwd[valid] < 0)).sum())
     if total < 10:
         return None
-    return {"count": total, "hit_rate": round(hits / total * 100), "horizon": horizon, "side": side}
+    avg = fwd_sum / total - (round_trip_cost if side == "buy" else 0.0)
+    return {"count": total, "hit_rate": round(hits / total * 100), "horizon": horizon, "side": side, "avg_return": round(avg * 100, 2)}

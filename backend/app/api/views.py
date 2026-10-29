@@ -456,6 +456,47 @@ def decisions_list(c: Container, limit: int = 100, status: str | None = None) ->
         ]
 
 
+AI_REVIEW_HORIZON = 5
+
+
+def _ai_review(c: Container, decisions: list[Decision]) -> dict[str, Any]:
+    """AI 가 보류한 후보와 그대로 낸 후보의 이후 5거래일 등락을 비교합니다.
+
+    매수는 '낸 쪽'의 평균이 높을수록, 매도는 '낸 쪽'의 평균이 낮을수록(판 뒤 더 떨어짐) AI 판단이 도움이 된 것입니다.
+    규칙 기반 설명(AI 미호출)과 AI 가 보류할 수 없는 손절은 뺍니다.
+    """
+    groups: dict[str, dict[str, list[float]]] = {"buy": {"followed": [], "held": []}, "sell": {"followed": [], "held": []}}
+    closes: dict[str, pd.Series | None] = {}
+    for d in decisions:
+        if d.model.startswith("rule-based") or d.reason == "stop_loss" or d.status == "cancelled" or not d.price:
+            continue
+        if d.symbol not in closes:
+            try:
+                closes[d.symbol] = c.market.history(d.symbol, 250)["close"]
+            except Exception:  # noqa: BLE001
+                closes[d.symbol] = None
+        close = closes[d.symbol]
+        if close is None:
+            continue
+        at = int(close.index.searchsorted(pd.Timestamp(d.created_at.date())))
+        if at + AI_REVIEW_HORIZON >= len(close):
+            continue  # 아직 5거래일이 지나지 않았습니다
+        fwd = float(close.iloc[at + AI_REVIEW_HORIZON]) / d.price - 1
+        groups[d.side]["held" if d.status == "held" else "followed"].append(fwd)
+
+    def summary(xs: list[float]) -> dict[str, Any]:
+        return {"count": len(xs), "avg_return": round(sum(xs) / len(xs) * 100, 2) if xs else None}
+
+    out: dict[str, Any] = {"horizon": AI_REVIEW_HORIZON}
+    for side, g in groups.items():
+        f, h = summary(g["followed"]), summary(g["held"])
+        edge = None
+        if f["avg_return"] is not None and h["avg_return"] is not None:
+            edge = round(f["avg_return"] - h["avg_return"], 2) if side == "buy" else round(h["avg_return"] - f["avg_return"], 2)
+        out[side] = {"followed": f, "held": h, "edge": edge}
+    return out
+
+
 def report(c: Container, period: str) -> dict[str, Any]:
     days = PERIODS.get(period, 30)
     now = now_kst()
@@ -467,6 +508,7 @@ def report(c: Container, period: str) -> dict[str, Any]:
             select(Order).where(Order.side == "sell", Order.filled_at >= now - timedelta(days=days), Order.realized_pnl.is_not(None))
         ).all()
         strategies = {st.id: st.name for st in s.scalars(select(Strategy)).all()}
+        reviewed = s.scalars(select(Decision).where(Decision.created_at >= now - timedelta(days=days))).all()
         by_strategy: dict[str, dict[str, float]] = {}
         for o in sells:
             row = by_strategy.setdefault(strategies.get(o.strategy_id, "?"), {"realized": 0.0, "trades": 0, "wins": 0})
@@ -499,6 +541,7 @@ def report(c: Container, period: str) -> dict[str, Any]:
             "avg": round(sum(pnls) / len(pnls)) if pnls else None,
         },
         "by_strategy": [{"name": k, **{kk: round(v) if kk == "realized" else v for kk, v in row.items()}} for k, row in by_strategy.items()],
+        "ai_review": _ai_review(c, reviewed),
         "performance": performance(c, period),
     }
 

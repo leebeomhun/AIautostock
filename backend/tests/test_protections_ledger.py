@@ -56,7 +56,7 @@ def test_ledger_chain_records_lifecycle_and_detects_tampering(container):
         assert not broken["ok"] and broken["broken_at"] == 1
 
 
-def test_bearish_research_blocks_buy_and_ml_adds_signal(container, tmp_path):
+def test_research_and_ml_add_signals(container, tmp_path):
     c = container
     today = now_kst().strftime("%Y-%m-%d")
     (tmp_path / "ml").mkdir()
@@ -78,6 +78,8 @@ def test_bearish_research_blocks_buy_and_ml_adds_signal(container, tmp_path):
     add_strategy(c, template="value")
     c.engine.tick()
     with session_scope(c.session_factory) as s:
-        assert not s.scalars(select(Decision).where(Decision.symbol == "000660", Decision.side == "buy")).all()
+        # 약세 리서치는 매수를 막지 않고 금액만 줄입니다 (자세한 검사는 test_strategy_rules).
+        for d in s.scalars(select(Decision).where(Decision.symbol == "000660", Decision.side == "buy")).all():
+            assert any("심층 리서치 의견" in n for n in d.risk_notes)
         for d in s.scalars(select(Decision).where(Decision.symbol.in_(["005930", "373220"]))).all():
             assert any(x["key"] == "ml" for x in d.signals)

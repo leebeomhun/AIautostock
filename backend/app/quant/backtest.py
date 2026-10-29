@@ -2,10 +2,11 @@
 
 gs-quant 의 backtests 모듈처럼 '트리거 → 액션' 구조로 하루씩 진행합니다.
 - 진입 트리거: signals.entry_frame (모멘텀 돌파 / 평균회귀 z-score)
-- 청산 트리거: 손절·익절(common_exit), 전략 고유 청산(template_exit)
+- 청산 트리거: 손절·익절(common_exit, 변동성 맞춤 폭), 전략 고유 청산·보유 기간 만료(template_exit)
 - 리밸런싱 트리거: 분기 첫 거래일 (gs-quant PeriodicTrigger 에 해당)
-- 액션: 다음 거래일 시가에 시장가 체결 (슬리피지·수수료·매도 세금 반영)
-신호는 종가로 판단하고 다음 날 시가에 체결해 미래 정보를 쓰지 않습니다.
+- 액션: 그날 종가에 시장가 체결 (슬리피지·수수료·매도 세금 반영)
+실시간 엔진은 모멘텀·평균회귀를 장 마감 무렵(기본 15:00–15:20)에만 판단하고 바로 주문합니다.
+일봉으로는 그 시점 가격을 알 수 없어 종가로 판단·체결을 근사합니다. 장중 손절은 종가 기준으로만 반영됩니다.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Any
 import pandas as pd
 
 from app.quant import timeseries as ts
-from app.quant.signals import common_exit, entry_frame, template_exit
+from app.quant.signals import RiskLevels, common_exit, entry_frame, risk_levels, template_exit, vol_before
 
 
 @dataclass
@@ -59,7 +60,10 @@ class _Pos:
     qty: int
     avg: float
     entry_i: int
+    stop: float
+    take: float
     partial: bool = False
+    pnl: float = 0.0  # 부분 매도까지 합친 실현손익
 
 
 def run_backtest(params: BacktestParams, frames: dict[str, pd.DataFrame], benchmark: pd.Series) -> BacktestResult:
@@ -76,7 +80,6 @@ def run_backtest(params: BacktestParams, frames: dict[str, pd.DataFrame], benchm
     entries = {s: entry_frame(params.template, f) for s, f in frames.items()} if params.template in ("momentum", "meanrev") else {}
     cash = float(params.amount)
     positions: dict[str, _Pos] = {}
-    pending: list[tuple[str, str, int]] = []  # (symbol, side, qty) — 다음 날 시가 체결
     equity_curve: list[float] = []
     wins = losses = orders = 0
     last_quarter: tuple[int, int] | None = None
@@ -89,67 +92,47 @@ def run_backtest(params: BacktestParams, frames: dict[str, pd.DataFrame], benchm
         v = float(f.at[d, col])
         return v if v > 0 and not math.isnan(v) else None
 
+    def sell(sym: str, qty: int, close: float) -> None:
+        nonlocal cash, wins, losses, orders
+        p = positions[sym]
+        qty = min(qty, p.qty)
+        fill = close * (1 - params.slippage_rate)
+        proceeds = fill * qty * (1 - params.fee_rate - params.sell_tax_rate)
+        cash += proceeds
+        p.pnl += proceeds - p.avg * qty * (1 + params.fee_rate)
+        p.qty -= qty
+        orders += 1
+        if p.qty <= 0:
+            # 승률은 부분 매도를 합쳐 매매 한 건(진입~전량 청산) 단위로 셉니다.
+            wins += p.pnl > 0
+            losses += p.pnl <= 0
+            del positions[sym]
+
+    def buy(sym: str, value: float, close: float, i: int, levels: RiskLevels) -> bool:
+        nonlocal cash, orders
+        fill = close * (1 + params.slippage_rate)
+        qty = int(min(value, cash) / (fill * (1 + params.fee_rate)))
+        if qty <= 0:
+            return False
+        cash -= fill * qty * (1 + params.fee_rate)
+        positions[sym] = _Pos(qty, fill, i, levels.stop_pct, levels.take_pct)
+        orders += 1
+        return True
+
     for i, d in enumerate(dates):
-        # 1) 전일 신호 체결 (시가)
-        for sym, side, qty in pending:
-            open_ = px(sym, d, "open")
-            if open_ is None:
-                continue
-            if side == "buy":
-                fill = open_ * (1 + params.slippage_rate)
-                cost = fill * qty * (1 + params.fee_rate)
-                if cost > cash:
-                    qty = int(cash / (fill * (1 + params.fee_rate)))
-                    cost = fill * qty * (1 + params.fee_rate)
-                if qty <= 0:
-                    continue
-                cash -= cost
-                p = positions.get(sym)
-                if p:
-                    p.avg = (p.avg * p.qty + fill * qty) / (p.qty + qty)
-                    p.qty += qty
-                else:
-                    positions[sym] = _Pos(qty, fill, i)
-            else:
-                p = positions.get(sym)
-                if not p:
-                    continue
-                qty = min(qty, p.qty)
-                fill = open_ * (1 - params.slippage_rate)
-                proceeds = fill * qty * (1 - params.fee_rate - params.sell_tax_rate)
-                cash += proceeds
-                pnl = proceeds - p.avg * qty * (1 + params.fee_rate)
-                wins += pnl > 0
-                losses += pnl <= 0
-                p.qty -= qty
-                if p.qty <= 0:
-                    del positions[sym]
-            orders += 1
-        pending = []
-
-        # 2) 종가 평가
-        value = cash
-        for sym, p in positions.items():
-            close = px(sym, d, "close") or p.avg
-            value += close * p.qty
-        equity_curve.append(value)
-
-        # 3) 종가 기준 신호 → 다음 날 체결 예약
+        # 실시간 엔진은 장 마감 무렵(15:00–15:20)에 판단하고 바로 주문하므로, 종가로 판단해 같은 종가에 체결합니다.
         budget = params.max_orders_per_day
         for sym, p in list(positions.items()):
-            f = frames[sym]
-            if d not in f.index:
+            close = px(sym, d, "close")
+            if close is None or budget <= 0:
                 continue
-            row = f.loc[d]
-            loc = f.index.get_loc(d)
-            prev = f.iloc[loc - 1] if loc > 0 else None
-            pnl = row["close"] / p.avg - 1
-            reason = common_exit(pnl, params.stop_pct, params.take_pct, p.partial) or template_exit(params.template, row, prev, i - p.entry_i)
-            if reason and budget > 0:
-                qty = max(1, p.qty // 2) if reason == "take_profit" else p.qty
+            row = frames[sym].loc[d]
+            pnl = close / p.avg - 1
+            reason = common_exit(pnl, p.stop, p.take, p.partial) or template_exit(params.template, row, i - p.entry_i, pnl)
+            if reason:
                 if reason == "take_profit":
                     p.partial = True
-                pending.append((sym, "sell", qty))
+                sell(sym, max(1, p.qty // 2) if reason == "take_profit" else p.qty, close)
                 budget -= 1
 
         if params.template == "value":
@@ -158,20 +141,15 @@ def run_backtest(params: BacktestParams, frames: dict[str, pd.DataFrame], benchm
                 last_quarter = q
                 picks = _value_picks(frames, d, params.max_weight_pct)
                 for sym in list(positions):
-                    if sym not in picks and budget > 0:
-                        pending.append((sym, "sell", positions[sym].qty))
-                        budget -= 1
-                free_cash = cash
-                for sym in picks:
-                    if sym in positions or budget <= 0:
-                        continue
                     close = px(sym, d, "close")
-                    if not close:
+                    if sym not in picks and budget > 0 and close:
+                        sell(sym, positions[sym].qty, close)
+                        budget -= 1
+                for sym in picks:
+                    close = px(sym, d, "close")
+                    if sym in positions or budget <= 0 or not close:
                         continue
-                    qty = int(min(target_value, free_cash) / close)
-                    if qty > 0:
-                        pending.append((sym, "buy", qty))
-                        free_cash -= qty * close
+                    if buy(sym, target_value, close, i, RiskLevels(params.stop_pct, params.take_pct, 1.0)):
                         budget -= 1
         elif entries:
             cands = []
@@ -181,19 +159,20 @@ def run_backtest(params: BacktestParams, frames: dict[str, pd.DataFrame], benchm
                 if bool(ef.at[d, "entry"]):
                     cands.append((float(ef.at[d, "score"]), sym))
             cands.sort(reverse=True)
-            free_cash = cash - sum((px(s, d, "close") or 0) * q for s, side, q in pending if side == "buy")
             for _score, sym in cands:
                 if budget <= 0:
                     break
                 close = px(sym, d, "close")
                 if not close:
                     continue
-                qty = int(min(target_value, free_cash) / close)
-                if qty <= 0:
-                    continue
-                pending.append((sym, "buy", qty))
-                free_cash -= qty * close
-                budget -= 1
+                levels = risk_levels(params.template, params.stop_pct, params.take_pct, vol_before(frames[sym], d))
+                if buy(sym, target_value * levels.size_scale, close, i, levels):
+                    budget -= 1
+
+        value = cash
+        for sym, p in positions.items():
+            value += (px(sym, d, "close") or p.avg) * p.qty
+        equity_curve.append(value)
 
     equity = pd.Series(equity_curve, index=dates)
     bench = benchmark.reindex(dates).ffill()

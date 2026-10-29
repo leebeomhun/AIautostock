@@ -60,7 +60,7 @@ npm run dev
   qlib 의 RobustZScoreNorm·CSRankNorm 순서를 따릅니다. 최근 60일 검증 순위 IC 가 0.02 미만이면 판단 점수에 반영하지 않고 참고로만 보여 줍니다.
 - **심층 리서치** `python -m app.research.daily [--symbols 005930] [--force]` — TradingAgents 의 역할 구성(기술·뉴스·펀더멘털 애널리스트 → 강세/약세 토론 → 포트폴리오 매니저 5단계 등급)을
   OpenAI 로 구현했습니다. 대상은 보유 종목 + ML 상위 종목, 최대 `RESEARCH_MAX_SYMBOLS`(기본 5), 종목당 OpenAI 호출 6회 안팎.
-  Underweight·Sell 종목은 신규 매수를 막습니다. 원본 TradingAgents 를 설치하고 `RESEARCH_ENGINE=tradingagents` 로 바꾸면 원본을 씁니다.
+  Underweight·Sell 종목은 신규 매수를 막지 않고 점수를 깎고 매수 금액을 줄입니다 (Underweight 50%, Sell 25%). 원본 TradingAgents 를 설치하고 `RESEARCH_ENGINE=tradingagents` 로 바꾸면 원본을 씁니다.
 - qlib·TradingAgents 원본 패키지는 이 서버(aarch64)에서 GitHub 소스 설치가 필요해 기본 구성에는 넣지 않았습니다.
 
 ## 보호 규칙 · 판단 원장

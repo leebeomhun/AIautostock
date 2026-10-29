@@ -4,7 +4,7 @@ import { api, type DecisionDetail, type ResearchItem, type SignalItem } from '..
 import { PriceChart } from '../components/Charts'
 import { Markdown } from '../components/Markdown'
 import { PageError, useShell } from '../components/Shell'
-import { clock, dateTime, mmss, sideLabel, signedWon, trendClass, won } from '../format'
+import { clock, dateTime, mmss, sideLabel, signedPct, signedWon, trendClass, won } from '../format'
 import { useAction, useNow, usePolling } from '../hooks'
 
 const SIDE_COLOR: Record<SignalItem['side'], string> = {
@@ -116,7 +116,7 @@ function Chart({ d }: { d: DecisionDetail }) {
   if (!c || c.closes.length < 2) return null
   const lines: { value: number; color: string; text: string }[] = []
   if (c.avg) lines.push({ value: c.avg, color: '#9AA3B2', text: `평균단가 ${won(c.avg)}` })
-  if (c.stop && d.side === 'sell') lines.push({ value: c.stop, color: '#7DB8FF', text: `손절 기준 ${won(c.stop)} (−${d.strategy?.stop_pct ?? ''}%)` })
+  if (c.stop && d.side === 'sell') lines.push({ value: c.stop, color: '#7DB8FF', text: `손절 기준 ${won(c.stop)} (−${c.stop_pct ?? d.strategy?.stop_pct ?? ''}%)` })
   if (c.high20 && d.side === 'buy') lines.push({ value: c.high20, color: '#FF5C5C', text: `직전 20일 고점 ${won(c.high20)}` })
   const first = c.closes[0]
   const last = c.closes[c.closes.length - 1]
@@ -468,6 +468,14 @@ export function Decision() {
                     <span className="mono" style={{ color: 'var(--text)' }}>{d.history_stat.count.toLocaleString('ko-KR')}</span>건 중{' '}
                     <span className="mono" style={{ color: 'var(--text)' }}>{d.history_stat.hit_rate}%</span>는 이후 {d.history_stat.horizon}거래일 안에{' '}
                     {d.history_stat.side === 'sell' ? '추가 하락' : '상승'}했습니다.
+                    {d.history_stat.avg_return != null && (
+                      <>
+                        {' '}
+                        {d.history_stat.side === 'sell' ? '팔지 않고 보유했다면 평균 ' : '비용을 뺀 평균 수익률은 '}
+                        <span className="mono" style={{ color: 'var(--text)' }}>{signedPct(d.history_stat.avg_return, 1)}</span>
+                        {d.history_stat.side === 'sell' ? '였습니다.' : '입니다.'}
+                      </>
+                    )}
                   </>
                 ) : (
                   '비교할 만한 과거 신호가 충분하지 않습니다.'

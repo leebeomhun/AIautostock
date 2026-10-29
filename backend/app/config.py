@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     # 엔진
     engine_enabled: bool = True
     engine_interval_seconds: int = 60
+    # 모멘텀·평균회귀의 진입과 전략 청산을 판단하는 장 마감 무렵 구간 (KST, 시작–끝). 비우면 장중 내내 판단합니다.
+    # 손절·익절은 이 구간과 상관없이 장중 내내 봅니다.
+    close_window: str = "15:00-15:20"
     approval_timeout_seconds: int = 300
     sim_always_open: bool = True
     sim_initial_cash: int = 20_000_000
@@ -74,6 +77,11 @@ class Settings(BaseSettings):
     protect_exit_cooldown_days: int = 1
     protect_stoploss_guard_count: int = 3
     protect_max_drawdown_pct: float = 10.0
+
+    # 야간 ML 학습에 더하는 코스피 보통주 시가총액 상위 종목 수 (키움 연결 시). 0 이면 기본 종목만 씁니다.
+    ml_universe_size: int = 200
+    # ML 라벨 보유 기간(거래일). 전략 보유 기간(3–10일)에 맞춘 기본값입니다.
+    ml_label_horizon: int = 5
 
     # 배치 결과(ML 점수·심층 리서치)를 읽는 폴더
     data_dir: Path = BACKEND_DIR / "data"

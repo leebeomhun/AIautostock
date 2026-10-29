@@ -222,7 +222,8 @@ class StrategyIn(BacktestIn):
     name: str | None = None
     exclude_risky: bool = True
     daily_loss_limit: int = Field(default=300_000, ge=0)
-    exec_mode: Mode = "approve"
+    # 비우면 모의투자는 완전 자동, 실거래 계좌는 승인 후 주문으로 정합니다 (create_strategy).
+    exec_mode: Mode | None = None
 
 
 def _strategy_dict(st: Strategy) -> dict:
@@ -248,6 +249,12 @@ def _strategy_dict(st: Strategy) -> dict:
 def list_strategies(request: Request) -> list[dict]:
     with session_scope(container(request).session_factory) as s:
         return [_strategy_dict(st) for st in s.scalars(select(Strategy).order_by(Strategy.id)).all()]
+
+
+def default_exec_mode(c: Container) -> Mode:
+    """새 전략의 기본 실행 방식. 실제로 쓰는 모드는 계좌 실행 방식(설정)과 이 값 중 낮은 쪽이고,
+    실거래 계좌는 실거래 확인(live_confirmed) 전까지 알림만 보냅니다 (TradingEngine.effective_mode)."""
+    return "approve" if c.broker.is_live else "auto"
 
 
 def create_strategy(c: Container, body: StrategyIn) -> dict:
@@ -276,7 +283,7 @@ def create_strategy(c: Container, body: StrategyIn) -> dict:
             max_weight_pct=body.max_weight_pct,
             daily_loss_limit=body.daily_loss_limit,
             max_orders_per_day=body.max_orders_per_day,
-            exec_mode=body.exec_mode,
+            exec_mode=body.exec_mode or default_exec_mode(c),
             status="running",
         )
         s.add(st)
@@ -358,7 +365,6 @@ def complete_onboarding(request: Request) -> dict:
                 take_pct=10,
                 max_weight_pct=15,
                 daily_loss_limit=loss,
-                exec_mode="approve",
             ),
         )
     with session_scope(c.session_factory) as s:
