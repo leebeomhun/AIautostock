@@ -73,8 +73,8 @@ function Backtest({ result, loading, name, stop, weight }: { result: BacktestRes
               grid={false}
               label={`${name} 백테스트: 연평균 ${signedPct(result.cagr, 1)}, 최대 낙폭 ${signedPct(result.mdd, 1)}`}
               series={[
-                { values: result.curve.map((c) => c.benchmark), color: '#6B7383', width: 1.8 },
-                { values: result.curve.map((c) => c.strategy), color: '#C8F04A', width: 2.4 },
+                { values: fillGaps(result.curve.map((c) => c.benchmark)), color: '#6B7383', width: 1.8 },
+                { values: fillGaps(result.curve.map((c) => c.strategy)), color: '#C8F04A', width: 2.4 },
               ]}
             />
           </div>
@@ -84,9 +84,9 @@ function Backtest({ result, loading, name, stop, weight }: { result: BacktestRes
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10, marginTop: 16 }}>
             {[
-              { label: '연평균 수익률', value: signedPct(result.cagr, 1), cls: result.cagr >= 0 ? 'up' : 'down' },
+              { label: '연평균 수익률', value: signedPct(result.cagr, 1), cls: result.cagr == null ? '' : result.cagr >= 0 ? 'up' : 'down' },
               { label: '최대 낙폭 (MDD)', value: signedPct(result.mdd, 1), cls: 'down' },
-              { label: '승률', value: `${result.win_rate}%`, cls: '' },
+              { label: '승률', value: result.win_rate == null ? '—' : `${result.win_rate}%`, cls: '' },
               { label: '총 거래 횟수', value: `${result.trades.toLocaleString('ko-KR')}회`, cls: '' },
             ].map((m) => (
               <div key={m.label} style={{ padding: 12, borderRadius: 10, background: 'var(--surface-1)' }}>
@@ -101,10 +101,23 @@ function Backtest({ result, loading, name, stop, weight }: { result: BacktestRes
             과거 결과는 미래 수익을 보장하지 않으며, 수수료·슬리피지를 반영한 추정치입니다.
             {result.data_source === 'simulated' && ' 지금은 키움 키가 없어 모의 시세로 계산했습니다.'}
           </div>
+          {result.warnings?.length > 0 && (
+            <ul className="small muted" style={{ marginTop: 10, paddingLeft: 18, display: 'grid', gap: 4 }} aria-label="백테스트 참고 사항">
+              {result.warnings.map((w) => <li key={w}>{w}</li>)}
+            </ul>
+          )}
         </>
       )}
     </section>
   )
+}
+
+/** 백테스트 곡선의 빈 값(null)은 앞 값으로 채우고, 앞부분 빈 값은 첫 값으로 채웁니다. */
+function fillGaps(values: (number | null)[]): number[] {
+  const first = values.find((v) => v != null)
+  if (first == null) return []
+  let last = first
+  return values.map((v) => (last = v ?? last))
 }
 
 export function StrategyNew() {

@@ -66,8 +66,10 @@ class Settings(BaseSettings):
 
     # 비용 가정 — 백테스트와 로컬 시뮬레이션에만 쓰입니다. 실제 수수료·세율은 계좌와 시점에 맞게 조정하세요.
     fee_rate: float = 0.00015
-    sell_tax_rate: float = 0.0018
+    sell_tax_rate: float = 0.0020  # 2026년 매도 세금 (근거는 app.quant.krx.SELL_TAX_RATE)
     slippage_rate: float = 0.0005
+    # 백테스트에서 상한가(전날 종가 +30%)로 마감한 날의 종가 매수는 체결되지 않은 것으로 봅니다. 0 이면 끕니다.
+    backtest_price_limit: float = 0.30
 
     # app.market.calendar 목록에 없는 임시 휴장일 ('2026-11-02,2026-11-03'). 이 날은 엔진이 판단·주문하지 않습니다.
     krx_extra_holidays: str = ""

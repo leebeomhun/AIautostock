@@ -253,18 +253,20 @@ export interface BacktestResult {
   message: string | null
   start: string | null
   end: string | null
-  curve: { date: string; strategy: number; benchmark: number }[]
-  cagr: number
-  mdd: number
-  win_rate: number
+  curve: { date: string; strategy: number | null; benchmark: number | null }[]
+  // 정의할 수 없는 지표(매매 없는 승률, 변동 없는 샤프 등)는 null
+  cagr: number | null
+  mdd: number | null
+  win_rate: number | null
   trades: number
   orders: number
-  total_return: number
-  benchmark_return: number
-  sharpe: number
-  volatility: number
+  total_return: number | null
+  benchmark_return: number | null
+  sharpe: number | null
+  volatility: number | null
   worst_month: { label: string; ret: number } | null
   note: string | null
+  warnings: string[]
   symbols: number
   data_source: string
 }

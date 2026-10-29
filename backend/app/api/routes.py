@@ -5,7 +5,7 @@ from dataclasses import asdict
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
 from app import ledger
@@ -179,6 +179,9 @@ def _template_meta(c: Container, key: str, tpl: dict) -> dict:
 
 
 class BacktestIn(BaseModel):
+    # 모르는 키는 거부하지 않고 받아 두었다가 백테스트 결과 warnings 로 알립니다 (backtest_config_warnings).
+    model_config = ConfigDict(extra="allow")
+
     template: Template
     universe: Universe = "k200"
     custom_symbols: list[str] = Field(default_factory=list)
@@ -229,12 +232,37 @@ def backtest(request: Request, body: BacktestIn) -> dict:
         slippage_rate=c.settings.slippage_rate,
         sectors={sym: instrument(sym).sector for sym in frames},
         max_per_sector=c.settings.max_positions_per_sector,
+        price_limit=c.settings.backtest_price_limit,
     )
     result = run_backtest(params, frames, bench)
+    if result.ok:
+        result.warnings += backtest_config_warnings(body)
     return {**asdict(result), "symbols": len(frames), "data_source": c.market.name}
 
 
+# 전략 생성 화면이 백테스트에도 같은 본문을 보냅니다. 결과에 영향을 주지만 일봉 백테스트가 반영하지 못하는 설정은 알리고,
+# 결과와 무관한 설정(이름·실행 방식)은 조용히 넘깁니다.
+BACKTEST_UNMODELED = {"daily_loss_limit": "일일 손실 한도", "exclude_risky": "투자유의 종목 제외"}
+BACKTEST_IGNORED = {"name", "exec_mode"}
+
+
+def backtest_config_warnings(body: BacktestIn) -> list[str]:
+    extra = body.model_extra or {}
+    out = []
+    unknown = sorted(k for k in extra if k not in BACKTEST_UNMODELED and k not in BACKTEST_IGNORED)
+    if unknown:
+        out.append(f"알 수 없는 설정 키라 무시했습니다: {', '.join(unknown)}")
+    unmodeled = [label for key, label in BACKTEST_UNMODELED.items() if extra.get(key)]
+    if unmodeled:
+        out.append(f"백테스트에 반영하지 않은 설정: {', '.join(unmodeled)} (과거 이력·장중 손익을 일봉으로 알 수 없음)")
+    if body.custom_symbols and body.universe != "custom":
+        out.append("종목 범위가 '직접 고르기'가 아니어서 custom_symbols 는 쓰지 않았습니다")
+    return out
+
+
 class StrategyIn(BacktestIn):
+    model_config = ConfigDict(extra="ignore")
+
     name: str | None = None
     exclude_risky: bool = True
     daily_loss_limit: int = Field(default=300_000, ge=0)
