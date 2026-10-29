@@ -12,7 +12,7 @@ from app import ledger
 from app.api import views
 from app.container import Container
 from app.db import now_kst, session_scope
-from app.market.universe import UNIVERSES, instrument, universe_symbols
+from app.market.universe import UNIVERSES, instrument, register, strategy_symbols, universe_symbols
 from app.models import Activity, Strategy
 from app.quant.backtest import BacktestParams, run_backtest
 from app.quant.signals import TEMPLATES, indicators
@@ -185,7 +185,14 @@ class BacktestIn(BaseModel):
 @router.post("/backtest")
 def backtest(request: Request, body: BacktestIn) -> dict:
     c = container(request)
-    symbols = universe_symbols(body.universe, body.custom_symbols)
+    # 실시간 엔진과 같은 종목 범위(코스피200 은 시가총액 상위 K200_UNIVERSE_SIZE 까지)와 업종으로 돌립니다.
+    try:
+        symbols = strategy_symbols(body.universe, body.custom_symbols, c.market, c.settings.k200_universe_size)
+        listed = getattr(c.market, "listed_instruments", None)
+        if listed is not None:
+            register(listed())
+    except Exception:  # noqa: BLE001
+        symbols = universe_symbols(body.universe, body.custom_symbols)
     if not symbols:
         raise HTTPException(status_code=400, detail="종목을 하나 이상 골라 주세요")
     days = 3 * 252 + 300
@@ -213,6 +220,8 @@ def backtest(request: Request, body: BacktestIn) -> dict:
         fee_rate=c.settings.fee_rate,
         sell_tax_rate=c.settings.sell_tax_rate,
         slippage_rate=c.settings.slippage_rate,
+        sectors={sym: instrument(sym).sector for sym in frames},
+        max_per_sector=c.settings.max_positions_per_sector,
     )
     result = run_backtest(params, frames, bench)
     return {**asdict(result), "symbols": len(frames), "data_source": c.market.name}

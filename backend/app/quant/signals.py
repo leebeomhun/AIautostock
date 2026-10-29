@@ -57,7 +57,12 @@ TEMPLATES: dict[str, dict[str, Any]] = {
 }
 
 Z_SCORE_BOUND = 2.0
-BREAKOUT_VOLUME_RATIO = 1.5
+# 돌파일 거래량 조건(20일 평균 대비 배수). 1.5 → 1.4 로 낮춘 쪽이 코스피 시총 상위 40·50·22종목 3년 백테스트에서
+# 승률을 지키면서 샤프가 올랐습니다. 1.3 은 수익이 더 났지만 MDD 가 2%p 넘게 나빠져 쓰지 않았습니다.
+BREAKOUT_VOLUME_RATIO = 1.4
+# 20일 고점 돌파 허용 폭: 종가가 직전 20일 고점의 (1 − 이 값)을 넘으면 돌파로 봅니다. 0 이면 고점을 넘어야 합니다.
+# 1–2% 완화는 거래만 늘고 백테스트 성과가 일관되게 좋아지지 않아 0 으로 둡니다.
+BREAKOUT_TOLERANCE = 0.0
 NEWS_VOLATILITY_PAUSE = 28.0  # 시장 20일 변동성(연환산 %)이 이 값을 넘으면 뉴스 전략을 멈춥니다
 NEWS_MAX_HOLD_DAYS = 3
 # 보유 기간 청산: (거래일, 최소 수익률). 그 기간이 지나도 수익률이 기준 미만이면 정리하고, None 이면 무조건 정리합니다.
@@ -70,6 +75,18 @@ CLOSE_WINDOW_TEMPLATES = ("momentum", "meanrev")
 VOL_STOP_TEMPLATES = ("meanrev",)
 # 손절폭 = 진입 전날 20일 일간 변동성 × 이 배수. 설정 손절 %보다 좁아지지 않고 그 2배를 넘지 않습니다.
 STOP_VOL_MULT = 2.5
+# 부분 익절 뒤 남은 물량에 트레일링 스톱을 거는 전략과 되돌림 폭(진입 전날 20일 일간 변동성 × 배수, 설정 손절의 2–3배).
+# 5–10%로 좁게 잡으면 크게 오르는 주도주를 일찍 잘라 성과가 나빠졌고, 이 넓은 폭은 수익은 비슷하고 MDD 가 줄었습니다.
+TRAIL_TEMPLATES = ("momentum",)
+TRAIL_VOL_MULT = 4.0
+# 시장 약세 필터: KOSPI 종가가 이 기간 이동평균 아래면 아래 전략의 신규 매수 비중에 배수를 곱합니다 (0 이면 진입을 쉽니다).
+# 진입을 아예 쉬면 반등 초입을 놓쳐 수익이 줄었고, 절반으로 줄이면 수익은 비슷하고 MDD 가 줄었습니다.
+WEAK_MARKET_MA = 60
+WEAK_MARKET_SIZE: dict[str, float] = {"momentum": 0.5}
+# 수급 가산: 기관·외국인이 함께 이 일수 이상 연속 순매수한 종목은 매수 점수를 조금 올립니다 (진입 조건은 아님).
+# 과거 수급 데이터가 없어 백테스트로 검증하지 못해 가산 폭을 작게 둡니다.
+FLOW_MIN_DAYS = 2
+FLOW_BONUS = 0.03
 # 정규장(09:00–15:30) 시작 후 분 → 하루 거래량 중 그때까지 체결됐을 누적 비율 (대략값).
 # 장 초반과 종가 동시호가(15:20–15:30)에 거래가 몰리는 U자형이라 단순 시간 비율보다 오전 비율이 큽니다.
 INTRADAY_VOLUME_CURVE = ((0, 0.0), (30, 0.17), (60, 0.27), (120, 0.41), (180, 0.52), (240, 0.62), (300, 0.73), (360, 0.86), (380, 0.9), (390, 1.0))
@@ -126,7 +143,7 @@ class Candidate:
     symbol: str
     name: str
     side: str  # buy | sell
-    reason: str  # breakout | meanrev_entry | meanrev_exit | trend_break | stop_loss | take_profit | news | rebalance | time_exit
+    reason: str  # breakout | meanrev_entry | meanrev_exit | trend_break | stop_loss | take_profit | trailing_stop | news | rebalance | time_exit
     score: float
     signals: list[Signal]
     qty_fraction: float = 1.0
@@ -177,7 +194,7 @@ def session_volume_fraction(now: datetime) -> float:
 def project_partial_bar(ind: pd.DataFrame, now: datetime) -> pd.DataFrame:
     """장중 미완성 봉(오늘 날짜의 마지막 행)의 거래량 비율을 하루치로 환산합니다.
 
-    vol_ratio 는 '오늘 누적 거래량 / 직전 20일 평균'이라 장 초반에는 거래량 1.5배 조건을 거의 넘지 못합니다.
+    vol_ratio 는 '오늘 누적 거래량 / 직전 20일 평균'이라 장 초반에는 거래량 기준(BREAKOUT_VOLUME_RATIO)을 거의 넘지 못합니다.
     지금까지 체결됐을 비율로 나눠 하루치로 늘리면 백테스트(완성 봉)와 같은 기준으로 비교할 수 있습니다.
     모멘텀·평균회귀 진입은 지금 15:00–15:20(CLOSE_WINDOW)에만 판단하는데, 그때도 하루 거래량의 85–90%만 쌓여
     있어 환산하지 않으면 백테스트보다 조금 엄격합니다. 장중 신호(뉴스 전략, 구간 설정을 비운 경우)는 이 환산이 없으면
@@ -206,7 +223,7 @@ def entry_frame(template: str, ind: pd.DataFrame) -> pd.DataFrame:
         s_trend = ((c / ind["ma60"] - 1) / 0.1).clip(0, 1)
         overbought = ((ind["rsi14"] - 70) / 30).clip(0, 1)
         score = (0.45 + 0.25 * s1 + 0.2 * s_vol + 0.1 * s_trend - 0.15 * overbought).clip(0.3, 0.9)
-        entry = (c > ind["high20_prev"]) & (ind["vol_ratio"] >= BREAKOUT_VOLUME_RATIO) & (c > ind["ma60"])
+        entry = (c > ind["high20_prev"] * (1 - BREAKOUT_TOLERANCE)) & (ind["vol_ratio"] >= BREAKOUT_VOLUME_RATIO) & (c > ind["ma60"])
     elif template == "meanrev":
         s_z = ((-ind["z20"] - Z_SCORE_BOUND) / 1.5).clip(0, 1)
         s_rsi = ((35 - ind["rsi14"]) / 15).clip(0, 1)
@@ -277,6 +294,43 @@ def vol_before(ind: pd.DataFrame, day: pd.Timestamp) -> float | None:
     return float(past.iloc[-1]) if len(past) else None
 
 
+def trailing_stop_pct(template: str, stop_pct: float, vol20_prev: float | None) -> float | None:
+    """부분 익절 뒤 남은 물량의 트레일링 폭(%). 보유 중 최고 종가에서 이만큼 내려오면 정리합니다.
+
+    폭 = 진입 전날 20일 일간 변동성 × TRAIL_VOL_MULT 이고, 설정 손절 %의 2배보다 좁아지지 않고 3배를 넘지 않습니다.
+    변동성을 모르면 2배를 씁니다. TRAIL_TEMPLATES 밖의 전략은 None 입니다.
+    """
+    if template not in TRAIL_TEMPLATES:
+        return None
+    if vol20_prev is None or math.isnan(vol20_prev) or vol20_prev <= 0:
+        return stop_pct * 2
+    daily = vol20_prev / math.sqrt(252)
+    return round(min(stop_pct * 3, max(stop_pct * 2, TRAIL_VOL_MULT * daily)), 2)
+
+
+def trailing_exit(trail_pct: float | None, partial_taken: bool, price: float, peak: float | None) -> str | None:
+    if trail_pct is None or not partial_taken or not peak:
+        return None
+    return "trailing_stop" if price <= peak * (1 - trail_pct / 100) else None
+
+
+def peak_close(ind: pd.DataFrame, since: datetime, price: float) -> float:
+    """보유를 시작한 날부터의 최고 종가. 오늘은 지금 가격까지 넣습니다 (장중 고가가 아니라 종가 기준)."""
+    held = ind["close"][ind.index >= pd.Timestamp(since).normalize()]
+    return max(float(held.max()) if len(held) else price, price)
+
+
+def weak_market(bench: pd.Series) -> pd.Series:
+    """날짜별 시장 약세 여부: KOSPI 종가가 WEAK_MARKET_MA 일 이동평균 아래인 날."""
+    ma = bench.rolling(WEAK_MARKET_MA, min_periods=WEAK_MARKET_MA).mean()
+    return (bench < ma).fillna(False)
+
+
+def sector_full(sector: str | None, counts: dict[str, int], limit: int) -> bool:
+    """이미 같은 업종을 limit 종목 들고 있는지. limit 가 0 이하이거나 업종을 모르면('기타' 포함) 제한하지 않습니다."""
+    return limit > 0 and bool(sector) and sector != "기타" and counts.get(sector, 0) >= limit
+
+
 # ---------------------------------------------------------------------------
 # 근거 문장
 
@@ -291,6 +345,18 @@ def _market_signal(bench_ret1: float | None, stock_ret1: float, side: str) -> Si
         return Signal("market", "시장 흐름", detail, "buy" if bench_ret1 > 0 else "hold", clamp(abs(bench_ret1) / 0.015) * 0.5)
     # 매도 판단에서 시장이 오르면 반등 여지가 있다는 보유 쪽 근거
     return Signal("market", "시장 흐름", detail, "hold" if bench_ret1 > 0 else "sell", clamp(abs(bench_ret1) / 0.015) * 0.5)
+
+
+def flow_signal(institution_days: int, foreign_days: int) -> tuple[Signal, float]:
+    """기관·외국인 연속 순매수 일수(키움 ka10131)로 만든 근거와 매수 점수 가산값."""
+    def days(n: int) -> str:
+        return f"{n}일 연속 순매수" if n > 0 else f"{-n}일 연속 순매도" if n < 0 else "순매수 연속 없음"
+
+    detail = f"기관 {days(institution_days)} · 외국인 {days(foreign_days)} (순매수 금액 상위 종목 기준)"
+    if institution_days >= FLOW_MIN_DAYS and foreign_days >= FLOW_MIN_DAYS:
+        return Signal("flow", "수급 (기관·외국인)", detail + f" · 점수 +{FLOW_BONUS:g}", "buy", clamp(min(institution_days, foreign_days) / 5)), FLOW_BONUS
+    side = "hold" if institution_days < 0 and foreign_days < 0 else "neutral"
+    return Signal("flow", "수급 (기관·외국인)", detail, side, 0.2 if side == "hold" else 0.0), 0.0
 
 
 def _news_placeholder() -> Signal:
@@ -345,6 +411,8 @@ def describe_exit(
     take_pct: float,
     bench_ret1: float | None,
     template: str | None = None,
+    peak: float | None = None,
+    trail_pct: float | None = None,
 ) -> Candidate:
     row = ind.iloc[-1]
     pnl = price / avg_price - 1 if avg_price else 0.0
@@ -360,6 +428,10 @@ def describe_exit(
         signals.append(Signal("take", "익절 기준 도달", f"평균단가 대비 {pct(pnl)} (기준 +{take_pct:.1f}%) · 절반 매도", "sell", 0.7))
         qty_fraction = 0.5
         score = 0.62
+    elif reason == "trailing_stop":
+        drop = price / peak - 1 if peak else 0.0
+        signals.append(Signal("trail", "트레일링 스톱", f"일부 익절 뒤 최고 종가 {peak or 0:,.0f}원보다 {pct(drop)} (기준 −{trail_pct or 0:.1f}%) · 평가손익 {pct(pnl)} · 남은 물량 정리", "sell", 0.65))
+        score = 0.6
     elif reason == "trend_break":
         signals.append(Signal("trend", "20일 이동평균 이탈", f"종가가 20일 평균 {row['ma20']:,.0f}원 아래로", "sell", 0.6))
         score = 0.58

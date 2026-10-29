@@ -107,6 +107,7 @@ def fallback_summary(c: Candidate, stop_pct: float, take_pct: float) -> str:
         "meanrev_entry": "20일 평균보다 크게 내려간 뒤 반등을 시작해, 평균으로 돌아오는 구간을 노린 매수를 제안합니다.",
         "stop_loss": f"평균단가 대비 {pct((pnl or 0) / 100)}로 손절 기준(−{stop_pct:g}%)을 넘어 전량 매도를 제안합니다.",
         "take_profit": f"평균단가 대비 {pct((pnl or 0) / 100)}로 익절 기준(+{take_pct:g}%)에 닿아 절반을 팔아 수익을 확정합니다.",
+        "trailing_stop": f"일부 익절한 뒤 보유 중 최고 종가에서 정해 둔 폭 이상 내려와 남은 물량 정리를 제안합니다 (평가손익 {pct((pnl or 0) / 100)}).",
         "trend_break": "종가가 20일 이동평균 아래로 내려가 상승 추세가 꺾인 것으로 보고 매도를 제안합니다.",
         "meanrev_exit": "가격이 20일 평균까지 돌아와 평균회귀 목표에 닿았습니다. 매도를 제안합니다.",
         "time_exit": "정해 둔 보유 기간이 지났는데 기대한 흐름이 나오지 않아 정리 매도를 제안합니다.",

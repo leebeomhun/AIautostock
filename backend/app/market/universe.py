@@ -2,9 +2,13 @@
 
 지수 구성 종목 전체가 아니라 시가총액 상위 일부만 담은 목록입니다. 키움 계좌는 국내 주식만 주문하므로
 S&P500 은 로컬 시뮬레이션에서만 고를 수 있습니다. base_price 는 시뮬레이션 출발 가격일 뿐 실제 시세가 아닙니다.
+키움에 연결되면 엔진이 코스피200 을 시가총액 상위 종목(K200_UNIVERSE_SIZE)으로 넓히고, 종목 리스트(ka10099)의
+이름·업종을 register 로 더합니다.
 """
 
 from __future__ import annotations
+
+from collections.abc import Iterable
 
 from app.market.base import Instrument
 
@@ -69,6 +73,12 @@ UNIVERSES: dict[str, dict] = {
 ALL_INSTRUMENTS: dict[str, Instrument] = {i.symbol: i for u in (KOSPI200, KOSDAQ150, SP500) for i in u}
 
 
+def register(items: Iterable[Instrument]) -> None:
+    """시세 소스가 알려 준 종목 이름·업종으로 덮어씁니다. 위 목록(시뮬레이션 출발 가격)은 바꾸지 않습니다."""
+    for item in items:
+        ALL_INSTRUMENTS[item.symbol] = item
+
+
 def instrument(symbol: str) -> Instrument:
     found = ALL_INSTRUMENTS.get(symbol)
     if found:
@@ -80,6 +90,18 @@ def universe_symbols(universe: str, custom: list[str] | None = None) -> list[str
     if universe == "custom":
         return [s for s in (custom or []) if s]
     return [i.symbol for i in UNIVERSES.get(universe, UNIVERSES["k200"])["instruments"]]
+
+
+def strategy_symbols(universe: str, custom: list[str] | None, market: object, k200_size: int) -> list[str]:
+    """전략이 실제로 보는 종목. 코스피200 은 시세 소스가 알려 주는 시가총액 상위 k200_size 종목을 더합니다.
+
+    키움(top_by_market_cap)만 지원하고 시뮬레이션은 기본 목록 그대로입니다. 조회가 실패하면 예외를 그대로 올립니다.
+    """
+    symbols = universe_symbols(universe, custom)
+    top = getattr(market, "top_by_market_cap", None)
+    if universe != "k200" or k200_size <= 0 or top is None:
+        return symbols
+    return sorted(set(symbols) | set(top(k200_size)))
 
 
 def universe_label(universe: str) -> str:

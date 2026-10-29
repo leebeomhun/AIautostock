@@ -26,12 +26,14 @@ from app.config import Settings
 from app.insights import Insights
 from app.db import now_kst, session_scope
 from app.market.base import MarketData
-from app.market.universe import instrument, universe_symbols
+from app.market.universe import instrument, register, strategy_symbols, universe_symbols
 from app.models import Activity, AccountSettings, DayState, Decision, EquitySnapshot, Order, Position, Strategy
 from app.quant.signals import (
     CLOSE_WINDOW_TEMPLATES,
     NEWS_VOLATILITY_PAUSE,
     TEMPLATES,
+    WEAK_MARKET_MA,
+    WEAK_MARKET_SIZE,
     Candidate,
     RiskLevels,
     Signal,
@@ -39,14 +41,20 @@ from app.quant.signals import (
     common_exit,
     describe_entry,
     describe_exit,
+    flow_signal,
     indicators,
     pct,
+    peak_close,
     project_partial_bar,
     risk_levels,
+    sector_full,
     signal_history,
     template_exit,
+    trailing_exit,
+    trailing_stop_pct,
     value_ranking,
     vol_before,
+    weak_market,
 )
 from app.trading.broker import Broker, BrokerAccount
 from app.trading.protections import ProtectionConfig, account_block, symbol_block
@@ -58,6 +66,7 @@ MODE_RANK = {"notify": 0, "approve": 1, "auto": 2}
 MODE_LABEL = {"notify": "알림만", "approve": "승인 후 주문", "auto": "완전 자동"}
 OPEN_ORDER_STATES = ("submitted", "partial")
 MAX_ENTRIES_PER_TICK = 3
+FRAME_DAYS = 400
 
 
 class EngineError(RuntimeError):
@@ -95,8 +104,10 @@ def strategy_label(strat: Strategy) -> str:
     return f"{strat.name} {strat.version}"
 
 
-def risk_rule_texts(strat: Strategy, levels: RiskLevels) -> list[str]:
+def risk_rule_texts(strat: Strategy, levels: RiskLevels, trail_pct: float | None = None) -> list[str]:
     rules = [f"손절 −{levels.stop_pct:g}%", f"익절 +{levels.take_pct:g}%", f"종목 비중 {strat.max_weight_pct * levels.size_scale:.0f}%"]
+    if trail_pct:
+        rules.append(f"일부 익절 뒤 최고 종가 대비 −{trail_pct:g}% 트레일링")
     if levels.widened:
         rules.append(f"변동성 반영 · 설정 손절 −{strat.stop_pct:g}%·비중 {strat.max_weight_pct:g}% 기준")
     return rules
@@ -136,7 +147,8 @@ class TradingEngine:
         self.last_tick_at: datetime | None = None
         self.last_error: str | None = None
         self._last_snapshot: datetime | None = None
-        self._stat_cache: dict[tuple, dict[str, Any] | None] = {}
+        self._stat_cache: dict[tuple, tuple[Any, dict[str, Any] | None]] = {}
+        self._listed_on: Any = None
         self._news_cache: dict[tuple[str, str], NewsResult | None] = {}
         with session_scope(session_factory) as s:
             self.account_settings(s)
@@ -205,8 +217,8 @@ class TradingEngine:
         ) or 0
         return max(0.0, -float(realized))
 
-    def _frames(self, symbols: list[str], now: datetime, days: int = 400) -> dict[str, pd.DataFrame]:
-        # 장중 미완성 봉은 거래량을 장 진행 비율로 하루치로 환산해 진입 조건(거래량 1.5배 등)을 백테스트와 같은 기준으로 봅니다.
+    def _frames(self, symbols: list[str], now: datetime, days: int = FRAME_DAYS) -> dict[str, pd.DataFrame]:
+        # 장중 미완성 봉은 거래량을 장 진행 비율로 하루치로 환산해 진입 조건(거래량 배수 등)을 백테스트와 같은 기준으로 봅니다.
         # 상시 운영 시뮬레이션은 시각과 상관없이 봉을 만들므로 환산하지 않습니다.
         project = not getattr(self.market, "always_open", False)
         frames: dict[str, pd.DataFrame] = {}
@@ -226,20 +238,57 @@ class TradingEngine:
         start, end = (x.strip() for x in window.split("-"))
         return start <= now.strftime("%H:%M") < end
 
-    def _bench_ret1(self) -> tuple[float | None, float | None]:
+    def _bench(self) -> tuple[float | None, float | None, bool]:
+        """KOSPI (오늘 등락률, 20일 변동성 %, 60일 이동평균 아래인지)."""
         try:
-            b = self.market.benchmark_history(60)
+            b = self.market.benchmark_history(WEAK_MARKET_MA + 60)
             if len(b) < 21:
-                return None, None
+                return None, None, False
             r = b.pct_change()
-            return float(r.iloc[-1]), float(r.iloc[-20:].std() * math.sqrt(252) * 100)
+            weak = len(b) >= WEAK_MARKET_MA and bool(weak_market(b).iloc[-1])
+            return float(r.iloc[-1]), float(r.iloc[-20:].std() * math.sqrt(252) * 100), weak
         except Exception:  # noqa: BLE001
-            return None, None
+            return None, None, False
+
+    def _universe(self, strat: Strategy) -> list[str]:
+        """전략의 종목 범위. 코스피200 은 키움 시가총액 상위 종목(K200_UNIVERSE_SIZE)까지 넓힙니다."""
+        try:
+            return strategy_symbols(strat.universe, strat.custom_symbols, self.market, self.settings.k200_universe_size)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("시가총액 상위 종목 조회 실패, 기본 목록만 씁니다: %s", exc)
+            return universe_symbols(strat.universe, strat.custom_symbols)
+
+    def _register_listing(self, now: datetime) -> None:
+        """키움 종목 리스트의 이름·업종을 하루 한 번 반영합니다 (넓힌 종목 범위의 이름, 업종 편중 제한)."""
+        listed = getattr(self.market, "listed_instruments", None)
+        if listed is None or self._listed_on == now.date():
+            return
+        try:
+            register(listed())
+            self._listed_on = now.date()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("종목 리스트 조회 실패: %s", exc)
+
+    def _prefetch(self, now: datetime) -> None:
+        """장 마감 판단 구간에는 넓힌 종목 범위의 일봉을 잠금 밖에서 먼저 받아 둡니다.
+
+        키움 일봉은 장중 5분마다 다시 받아 종목이 많으면 수십 초 걸립니다. 그동안 승인·설정 요청이 막히지 않게 합니다.
+        """
+        if getattr(self.market, "always_open", False) or not self.market.status(now).open or not self.in_close_window(now):
+            return
+        with session_scope(self.session_factory) as s:
+            strats = s.scalars(select(Strategy).where(Strategy.status == "running", Strategy.template.in_(CLOSE_WINDOW_TEMPLATES))).all()
+        for sym in sorted({sym for strat in strats for sym in self._universe(strat)}):
+            try:
+                self.market.history(sym, FRAME_DAYS)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("일봉 미리 받기 실패 %s: %s", sym, exc)
 
     # ------------------------------------------------------------------ 주기
     def tick(self, now: datetime | None = None) -> None:
         now = now or now_kst()
         try:
+            self._prefetch(now)
             with self.lock:
                 prepared = self._prepare(now)
             judged = self._judge_all(prepared)
@@ -265,7 +314,8 @@ class TradingEngine:
             s.commit()
             if not st.onboarded or not st.running or not self.market.status(now).open or loss.all_halted:
                 return []
-            bench_ret1, bench_vol = self._bench_ret1()
+            bench_ret1, bench_vol, market_weak = self._bench()
+            self._register_listing(now)
             prepared: list[Prepared] = []
             # 승인 대기 중인 매수 금액은 아직 현금에 남아 있으므로 미리 빼 둡니다.
             pending_buy = sum(
@@ -276,7 +326,9 @@ class TradingEngine:
                 self._auto_pause(s, strat, bench_vol, now)
                 # 일시정지한 전략도 보유 종목의 손절·익절·청산은 계속 관리합니다.
                 prepared.extend(
-                    self._prepare_strategy(s, st, strat, acct, loss, bench_ret1, bench_vol, now, budget, allow_entries=strat.status == "running")
+                    self._prepare_strategy(
+                        s, st, strat, acct, loss, bench_ret1, bench_vol, now, budget, allow_entries=strat.status == "running", market_weak=market_weak
+                    )
                 )
                 s.commit()
             return prepared
@@ -323,13 +375,23 @@ class TradingEngine:
             q = q.where(Decision.status != "expired")
         return bool(s.scalar(q))
 
-    def _history_stat(self, strat: Strategy, reason: str, frames: dict[str, pd.DataFrame], now: datetime) -> dict[str, Any] | None:
-        key = (strat.template, reason, strat.universe, tuple(sorted(frames)), strat.stop_pct, strat.take_pct, now.date())
-        if key not in self._stat_cache:
-            st = self.settings
-            cost = 2 * (st.fee_rate + st.slippage_rate) + st.sell_tax_rate
-            self._stat_cache[key] = signal_history(reason, frames, strat.stop_pct, strat.take_pct, round_trip_cost=cost)
-        return self._stat_cache[key]
+    def _history_stat(self, strat: Strategy, reason: str, frames: dict[str, pd.DataFrame], now: datetime, full: bool = True) -> dict[str, Any] | None:
+        """과거 유사 신호 통계. 종목 범위 전체 일봉(full)으로 하루 한 번 계산합니다.
+
+        모멘텀·평균회귀는 장 마감 판단 구간 밖에서 보유 종목 일봉만 받으므로, 그때는 가장 최근에 전체로 계산한 값을 쓰고
+        아직 없으면(재시작 직후) 보유 종목 몇 개로 만든 작은 표본 대신 통계를 비웁니다.
+        """
+        key = (strat.template, reason, strat.universe, tuple(strat.custom_symbols or ()), strat.stop_pct, strat.take_pct)
+        hit = self._stat_cache.get(key)
+        if hit is not None and (hit[0] == now.date() or not full):
+            return hit[1]
+        if not full:
+            return None
+        st = self.settings
+        cost = 2 * (st.fee_rate + st.slippage_rate) + st.sell_tax_rate
+        stat = signal_history(reason, frames, strat.stop_pct, strat.take_pct, round_trip_cost=cost)
+        self._stat_cache[key] = (now.date(), stat)
+        return stat
 
     def _chart(self, ind: pd.DataFrame, avg: float | None, levels: RiskLevels, side: str) -> dict[str, Any]:
         tail = ind.iloc[-10:]
@@ -358,10 +420,11 @@ class TradingEngine:
         now: datetime,
         budget: TickBudget,
         allow_entries: bool = True,
+        market_weak: bool = False,
     ) -> list[Prepared]:
         out: list[Prepared] = []
         positions = s.scalars(select(Position).where(Position.strategy_id == strat.id)).all()
-        symbols = universe_symbols(strat.universe, strat.custom_symbols)
+        symbols = self._universe(strat)
         if strat.exclude_risky:
             try:
                 risky = self.market.risky_symbols()
@@ -369,7 +432,12 @@ class TradingEngine:
                 log.warning("투자유의 종목 조회 실패: %s", exc)
                 risky = set()
             symbols = [x for x in symbols if x not in risky]
-        frames = self._frames(sorted(set(symbols) | {p.symbol for p in positions}), now)
+        # 모멘텀·평균회귀의 진입과 전략 청산은 백테스트처럼 장 마감 무렵 가격으로만 판단합니다.
+        # 그래서 오전 거래량이 덜 쌓여 거래량 기준을 못 넘는 문제는 생기지 않고, 이 구간에서도 아직 안 쌓인 거래량은
+        # _frames 의 project_partial_bar 가 하루치로 환산합니다. 구간 설정을 비워 장중에 판단해도 같은 환산이 적용됩니다.
+        close_ok = strat.template not in CLOSE_WINDOW_TEMPLATES or self.in_close_window(now)
+        # 구간 밖에서는 손절·익절에 필요한 보유 종목 일봉만 받습니다 (넓힌 종목 범위를 장중 내내 받지 않도록).
+        frames = self._frames(sorted((set(symbols) if close_ok else set()) | {p.symbol for p in positions}), now)
         quotes: dict[str, float] = {}
         prev_closes: dict[str, float] = {}
 
@@ -382,10 +450,6 @@ class TradingEngine:
         orders_today = self._orders_today(s, strat.id, now)
         strategy_loss = self._strategy_loss_today(s, strat.id, now)
         invested = sum(p.qty * price_of(p.symbol) for p in positions if p.symbol in frames)
-        # 모멘텀·평균회귀의 진입과 전략 청산은 백테스트처럼 장 마감 무렵 가격으로만 판단합니다.
-        # 그래서 오전 거래량이 덜 쌓여 '거래량 1.5배'를 못 넘는 문제는 생기지 않고, 이 구간에서도 아직 안 쌓인 거래량은
-        # _frames 의 project_partial_bar 가 하루치로 환산합니다. 구간 설정을 비워 장중에 판단해도 같은 환산이 적용됩니다.
-        close_ok = strat.template not in CLOSE_WINDOW_TEMPLATES or self.in_close_window(now)
         account_ctx = {
             "equity": round(acct.equity),
             "cash": round(acct.cash),
@@ -400,7 +464,11 @@ class TradingEngine:
             "take_pct": strat.take_pct,
             "max_weight_pct": strat.max_weight_pct,
         }
-        market_ctx = {"kospi_ret1_pct": None if bench_ret1 is None else round(bench_ret1 * 100, 2), "kospi_vol20_pct": None if bench_vol is None else round(bench_vol, 1)}
+        market_ctx = {
+            "kospi_ret1_pct": None if bench_ret1 is None else round(bench_ret1 * 100, 2),
+            "kospi_vol20_pct": None if bench_vol is None else round(bench_vol, 1),
+            f"kospi_below_ma{WEAK_MARKET_MA}": market_weak,
+        }
 
         # ---- 보유 종목 청산 -------------------------------------------------
         rebalance_drop: set[str] = set()
@@ -430,11 +498,15 @@ class TradingEngine:
             pnl = price / pos.avg_price - 1 if pos.avg_price else 0.0
             hold_days = int(np.busday_count(pos.opened_at.date(), now.date()))
             row = ind.iloc[-1]
-            # 진입 전날 변동성으로 정한 손절·익절폭이라 보유 중에는 바뀌지 않습니다.
-            levels = risk_levels(strat.template, strat.stop_pct, strat.take_pct, vol_before(ind, pos.opened_at))
+            # 진입 전날 변동성으로 정한 손절·익절·트레일링 폭이라 보유 중에는 바뀌지 않습니다.
+            vol0 = vol_before(ind, pos.opened_at)
+            levels = risk_levels(strat.template, strat.stop_pct, strat.take_pct, vol0)
             reason = common_exit(pnl, levels.stop_pct, levels.take_pct, pos.partial_taken)
+            # 일부 익절한 뒤 남은 물량은 보유 중 최고 종가에서 일정 폭 내려오면 정리합니다 (백테스트처럼 장 마감 무렵에만 판단).
+            trail = trailing_stop_pct(strat.template, strat.stop_pct, vol0)
+            peak = peak_close(ind, pos.opened_at, price) if trail and pos.partial_taken else None
             if reason is None and strat.template != "value" and close_ok:
-                reason = template_exit(strat.template, row, hold_days, pnl)
+                reason = trailing_exit(trail, pos.partial_taken, price, peak) or template_exit(strat.template, row, hold_days, pnl)
             if reason is None and pos.symbol in rebalance_drop:
                 reason = "rebalance"
             if reason is None:
@@ -443,7 +515,7 @@ class TradingEngine:
                 continue
             if self._already_decided(s, strat.id, pos.symbol, "sell", reason, now):
                 continue
-            cand = describe_exit(reason, pos.symbol, pos.name, ind, pos.avg_price, price, levels.stop_pct, levels.take_pct, bench_ret1, strat.template)
+            cand = describe_exit(reason, pos.symbol, pos.name, ind, pos.avg_price, price, levels.stop_pct, levels.take_pct, bench_ret1, strat.template, peak, trail)
             self._attach_insights(cand, now)
             qty = max(1, pos.qty // 2) if reason == "take_profit" else pos.qty
             blocked = check_sell(loss, orders_today, strat.max_orders_per_day, cand.mandatory)
@@ -466,6 +538,8 @@ class TradingEngine:
                             "hold_days": hold_days,
                             "stop_pct": levels.stop_pct,
                             "take_pct": levels.take_pct,
+                            "partial_taken": pos.partial_taken,
+                            **({"peak_close": round(peak), "trail_pct": trail} if peak else {}),
                         },
                         "account": account_ctx,
                         "market": market_ctx,
@@ -473,8 +547,8 @@ class TradingEngine:
                         "proposed_qty": qty,
                     },
                     chart=self._chart(ind, pos.avg_price, levels, "sell"),
-                    history_stat=self._history_stat(strat, reason, frames, now),
-                    risk_rules=risk_rule_texts(strat, levels),
+                    history_stat=self._history_stat(strat, reason, frames, now, close_ok),
+                    risk_rules=risk_rule_texts(strat, levels, trail),
                     risk_notes=[],
                     stop_pct=levels.stop_pct,
                     take_pct=levels.take_pct,
@@ -518,14 +592,34 @@ class TradingEngine:
                     continue
                 entries.append(Candidate(sym, instrument(sym).name, "buy", "rebalance_buy", 0.6, signals))
         # 심층 리서치가 약세(Underweight·Sell)인 종목도 막지 않고, 점수를 깎아 뒤로 보내고 아래에서 적게 삽니다.
+        # ML 순위 보정(예측력이 검증된 경우만)도 정렬 전에 반영해, 같은 주기 진입 수가 모자랄 때 상위 종목이 먼저 들어갑니다.
+        # 모멘텀은 기관·외국인 동반 연속 순매수(키움 ka10131)도 작은 점수 가산으로만 씁니다 (진입 조건 아님).
+        flow = self._investor_flow() if entries and strat.template == "momentum" else {}
         haircuts: dict[str, tuple[float, float, str]] = {}
         for cand in entries:
+            self._attach_insights(cand, now)
+            if cand.symbol in flow:
+                sig, bonus = flow_signal(*flow[cand.symbol])
+                self._insert_signals(cand, [sig])
+                cand.score = clamp(cand.score + bonus, 0.3, 0.9)
+                cand.metrics["flow_days"] = {"institution": flow[cand.symbol][0], "foreign": flow[cand.symbol][1]}
             cut = self.insights.research_buy_haircut(cand.symbol, now.date()) if self.insights else None
             if cut:
                 haircuts[cand.symbol] = cut
                 cand.score = clamp(cand.score - cut[0], 0.3, 0.9)
                 cand.metrics["research_size_scale"] = cut[1]
         entries.sort(key=lambda c: c.score, reverse=True)
+        # 시장 약세(KOSPI 60일선 아래)면 모멘텀 신규 매수 금액을 줄입니다 (WEAK_MARKET_SIZE, 0 이면 쉼).
+        market_scale = WEAK_MARKET_SIZE.get(strat.template, 1.0) if market_weak else 1.0
+        if entries and market_scale <= 0:
+            self._guard_activity(s, f"시장 약세 · {strat.name} 신규 매수 쉼", f"KOSPI가 {WEAK_MARKET_MA}일 이동평균 아래입니다", now)
+            return out
+        # 같은 업종은 MAX_POSITIONS_PER_SECTOR 종목까지만 들고 있습니다 (0 이면 제한 없음, 리밸런싱은 가치 순위를 그대로 따릅니다).
+        sector_limit = self.settings.max_positions_per_sector if strat.template != "value" else 0
+        sector_counts: dict[str, int] = {}
+        for p in positions:
+            sec = instrument(p.symbol).sector
+            sector_counts[sec] = sector_counts.get(sec, 0) + 1
 
         taken = 0
         # 리밸런싱은 목표 종목을 한 번에 제안하고, 나머지 전략은 주기당 진입 수를 제한합니다.
@@ -539,12 +633,16 @@ class TradingEngine:
             if why:
                 self._guard_activity(s, f"{cand.name} 매수 보류", why, now)
                 continue
-            self._attach_insights(cand, now)
+            sector = instrument(cand.symbol).sector
+            if sector_full(sector, sector_counts, sector_limit):
+                self._guard_activity(s, f"{cand.name} 매수 보류", f"같은 업종({sector}) 종목을 이미 {sector_limit}개 들고 있습니다", now)
+                continue
             price = price_of(cand.symbol)
             ind = frames[cand.symbol]
-            levels = risk_levels(strat.template, strat.stop_pct, strat.take_pct, vol_before(ind, now))
+            vol0 = vol_before(ind, now)
+            levels = risk_levels(strat.template, strat.stop_pct, strat.take_pct, vol0)
             cut = haircuts.get(cand.symbol)
-            weight = strat.max_weight_pct * levels.size_scale * (cut[1] if cut else 1.0)
+            weight = strat.max_weight_pct * levels.size_scale * (cut[1] if cut else 1.0) * market_scale
             qty = size_buy(price, strat.allocation, invested, 0.0, weight, budget.cash, self.settings.fee_rate)
             chk = check_buy(qty, price, loss, orders_today, strat.max_orders_per_day, strategy_loss, strat.daily_loss_limit, 0.0, strat.allocation, strat.max_weight_pct)
             if chk.blocked:
@@ -554,6 +652,8 @@ class TradingEngine:
                 chk.notes.append(f"변동성이 커서 손절 −{levels.stop_pct:g}%로 넓히고 매수 금액을 {levels.size_scale * 100:.0f}%로 줄였습니다")
             if cut:
                 chk.notes.append(cut[2])
+            if market_scale < 1:
+                chk.notes.append(f"KOSPI가 {WEAK_MARKET_MA}일 이동평균 아래라 매수 금액을 {market_scale * 100:.0f}%로 줄였습니다")
             out.append(
                 Prepared(
                     strategy_id=strat.id,
@@ -570,8 +670,8 @@ class TradingEngine:
                         "proposed_qty": chk.qty,
                     },
                     chart=self._chart(ind, None, levels, "buy"),
-                    history_stat=self._history_stat(strat, cand.reason, frames, now),
-                    risk_rules=risk_rule_texts(strat, levels),
+                    history_stat=self._history_stat(strat, cand.reason, frames, now, close_ok),
+                    risk_rules=risk_rule_texts(strat, levels, trailing_stop_pct(strat.template, strat.stop_pct, vol0)),
                     risk_notes=chk.notes,
                     stop_pct=levels.stop_pct,
                     take_pct=levels.take_pct,
@@ -582,6 +682,7 @@ class TradingEngine:
             invested += chk.qty * price
             budget.cash -= chk.qty * price * (1 + self.settings.fee_rate)
             budget.claimed.add(cand.symbol)
+            sector_counts[sector] = sector_counts.get(sector, 0) + 1
             orders_today += 1
             taken += 1
         if strat.template == "value" and strat.last_rebalanced != quarter:
@@ -603,9 +704,24 @@ class TradingEngine:
         research = self.insights.research_signal(cand.symbol, now.date())
         if research:
             extra.append(research)
+        self._insert_signals(cand, extra)
+
+    @staticmethod
+    def _insert_signals(cand: Candidate, extra: list[Signal]) -> None:
+        """근거 시그널을 뉴스 항목 앞에 끼웁니다."""
         if extra:
             at = next((i for i, x in enumerate(cand.signals) if x.key == "news"), len(cand.signals))
             cand.signals[at:at] = extra
+
+    def _investor_flow(self) -> dict[str, tuple[int, int]]:
+        get = getattr(self.market, "investor_flow", None)
+        if get is None:
+            return {}
+        try:
+            return get()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("기관·외국인 수급 조회 실패: %s", exc)
+            return {}
 
     def _guard_activity(self, s: Session, title: str, detail: str, now: datetime) -> None:
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)

@@ -2,7 +2,9 @@
 
 gs-quant 의 backtests 모듈처럼 '트리거 → 액션' 구조로 하루씩 진행합니다.
 - 진입 트리거: signals.entry_frame (모멘텀 돌파 / 평균회귀 z-score)
-- 청산 트리거: 손절·익절(common_exit, 변동성 맞춤 폭), 전략 고유 청산·보유 기간 만료(template_exit)
+- 청산 트리거: 손절·익절(common_exit, 변동성 맞춤 폭), 부분 익절 뒤 트레일링 스톱(trailing_exit),
+  전략 고유 청산·보유 기간 만료(template_exit)
+- 진입 필터: 시장 약세(KOSPI 60일선 아래)면 모멘텀 매수 비중 축소, 업종당 보유 종목 수 제한(max_per_sector, 기본 끔)
 - 리밸런싱 트리거: 분기 첫 거래일 (gs-quant PeriodicTrigger 에 해당)
 - 액션: 그날 종가에 시장가 체결 (슬리피지·수수료·매도 세금 반영)
 실시간 엔진은 모멘텀·평균회귀를 장 마감 무렵(기본 15:00–15:20)에만 판단하고 바로 주문합니다.
@@ -18,7 +20,19 @@ from typing import Any
 import pandas as pd
 
 from app.quant import timeseries as ts
-from app.quant.signals import RiskLevels, common_exit, entry_frame, risk_levels, template_exit, vol_before
+from app.quant.signals import (
+    WEAK_MARKET_SIZE,
+    RiskLevels,
+    common_exit,
+    entry_frame,
+    risk_levels,
+    sector_full,
+    template_exit,
+    trailing_exit,
+    trailing_stop_pct,
+    vol_before,
+    weak_market,
+)
 
 
 @dataclass
@@ -33,6 +47,8 @@ class BacktestParams:
     sell_tax_rate: float = 0.0018
     slippage_rate: float = 0.0005
     years: float = 3.0
+    sectors: dict[str, str] | None = None  # 종목 → 업종
+    max_per_sector: int = 0  # 같은 업종 동시 보유 종목 수 한도 (0 이면 제한 없음)
 
 
 @dataclass
@@ -62,6 +78,8 @@ class _Pos:
     entry_i: int
     stop: float
     take: float
+    trail: float | None = None
+    peak: float = 0.0  # 보유 중 최고 종가
     partial: bool = False
     pnl: float = 0.0  # 부분 매도까지 합친 실현손익
 
@@ -84,6 +102,8 @@ def run_backtest(params: BacktestParams, frames: dict[str, pd.DataFrame], benchm
     wins = losses = orders = 0
     last_quarter: tuple[int, int] | None = None
     target_value = params.amount * params.max_weight_pct / 100
+    weak = weak_market(benchmark)
+    sectors = params.sectors or {}
 
     def px(sym: str, d: pd.Timestamp, col: str) -> float | None:
         f = frames[sym]
@@ -108,14 +128,14 @@ def run_backtest(params: BacktestParams, frames: dict[str, pd.DataFrame], benchm
             losses += p.pnl <= 0
             del positions[sym]
 
-    def buy(sym: str, value: float, close: float, i: int, levels: RiskLevels) -> bool:
+    def buy(sym: str, value: float, close: float, i: int, levels: RiskLevels, trail: float | None = None) -> bool:
         nonlocal cash, orders
         fill = close * (1 + params.slippage_rate)
         qty = int(min(value, cash) / (fill * (1 + params.fee_rate)))
         if qty <= 0:
             return False
         cash -= fill * qty * (1 + params.fee_rate)
-        positions[sym] = _Pos(qty, fill, i, levels.stop_pct, levels.take_pct)
+        positions[sym] = _Pos(qty, fill, i, levels.stop_pct, levels.take_pct, trail, close)
         orders += 1
         return True
 
@@ -128,7 +148,12 @@ def run_backtest(params: BacktestParams, frames: dict[str, pd.DataFrame], benchm
                 continue
             row = frames[sym].loc[d]
             pnl = close / p.avg - 1
-            reason = common_exit(pnl, p.stop, p.take, p.partial) or template_exit(params.template, row, i - p.entry_i, pnl)
+            p.peak = max(p.peak, close)
+            reason = (
+                common_exit(pnl, p.stop, p.take, p.partial)
+                or trailing_exit(p.trail, p.partial, close, p.peak)
+                or template_exit(params.template, row, i - p.entry_i, pnl)
+            )
             if reason:
                 if reason == "take_profit":
                     p.partial = True
@@ -152,6 +177,10 @@ def run_backtest(params: BacktestParams, frames: dict[str, pd.DataFrame], benchm
                     if buy(sym, target_value, close, i, RiskLevels(params.stop_pct, params.take_pct, 1.0)):
                         budget -= 1
         elif entries:
+            size = WEAK_MARKET_SIZE.get(params.template, 1.0) if bool(weak.get(d, False)) else 1.0
+            held_sectors: dict[str, int] = {}
+            for sym in positions:
+                held_sectors[sectors.get(sym, "")] = held_sectors.get(sectors.get(sym, ""), 0) + 1
             cands = []
             for sym, ef in entries.items():
                 if sym in positions or d not in ef.index:
@@ -160,14 +189,18 @@ def run_backtest(params: BacktestParams, frames: dict[str, pd.DataFrame], benchm
                     cands.append((float(ef.at[d, "score"]), sym))
             cands.sort(reverse=True)
             for _score, sym in cands:
-                if budget <= 0:
+                if budget <= 0 or size <= 0:
                     break
                 close = px(sym, d, "close")
-                if not close:
+                sector = sectors.get(sym)
+                if not close or sector_full(sector, held_sectors, params.max_per_sector):
                     continue
-                levels = risk_levels(params.template, params.stop_pct, params.take_pct, vol_before(frames[sym], d))
-                if buy(sym, target_value * levels.size_scale, close, i, levels):
+                vol = vol_before(frames[sym], d)
+                levels = risk_levels(params.template, params.stop_pct, params.take_pct, vol)
+                if buy(sym, target_value * levels.size_scale * size, close, i, levels, trailing_stop_pct(params.template, params.stop_pct, vol)):
                     budget -= 1
+                    if sector:
+                        held_sectors[sector] = held_sectors.get(sector, 0) + 1
 
         value = cash
         for sym, p in positions.items():

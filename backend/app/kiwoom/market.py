@@ -10,10 +10,12 @@ import pandas as pd
 
 from app.db import now_kst
 from app.kiwoom.client import KiwoomClient, to_float, to_int
-from app.market.base import MarketStatus, Quote, krx_session_status
+from app.market.base import Instrument, MarketStatus, Quote, krx_session_status
 
 CHART_PATH = "/api/dostk/chart"
 STKINFO_PATH = "/api/dostk/stkinfo"
+FLOW_PATH = "/api/dostk/frgnistt"
+FLOW_TTL = 1800.0  # 기관·외국인 연속 순매수 목록(ka10131)을 다시 받는 간격(초)
 KOSPI_INDEX = "001"
 ROWS_PER_PAGE = 600  # ka10081 한 페이지에 오는 대략의 일수
 # 오늘 봉이 확정됐다고 보는 시각. 15:30 장 마감 뒤 종가가 일봉 차트에 반영될 여유를 둡니다.
@@ -46,6 +48,7 @@ class KiwoomMarket:
         self._bench: tuple[float, pd.Series] | None = None
         self._risky: tuple[str, set[str]] | None = None
         self._lists: dict[str, tuple[str, list[dict]]] = {}
+        self._flow: tuple[float, dict[str, tuple[int, int]]] | None = None
 
     def _code(self, symbol: str) -> str:
         suffix = {"NXT": "_NX", "SOR": "_AL"}.get(self.exchange, "")
@@ -251,6 +254,34 @@ class KiwoomMarket:
             caps.append((to_int(r.get("listCount")) * to_int(r.get("lastPrice")), code))
         caps.sort(reverse=True)
         return [code for _cap, code in caps[:limit]]
+
+    def investor_flow(self) -> dict[str, tuple[int, int]]:
+        """기관·외국인 연속 순매수 일수 (ka10131, 코스피·코스닥 순매수 금액 상위 100종목씩). 종목 → (기관, 외국인).
+
+        음수는 연속 순매도 일수입니다. 시장마다 한 번 호출로 끝나 30분 동안 다시 받지 않습니다.
+        """
+        now = time.monotonic()
+        if self._flow and now - self._flow[0] < FLOW_TTL:
+            return self._flow[1]
+        out: dict[str, tuple[int, int]] = {}
+        for market_type in ("001", "101"):
+            body = {"dt": "1", "strt_dt": "", "end_dt": "", "mrkt_tp": market_type, "netslmt_tp": "2", "stk_inds_tp": "0", "amt_qty_tp": "0", "stex_tp": "1"}
+            for r in self.client.request("ka10131", FLOW_PATH, body).data.get("orgn_frgnr_cont_trde_prst") or []:
+                code = str(r.get("stk_cd") or "").strip()[:6]
+                if code:
+                    out[code] = (to_int(r.get("orgn_cont_netprps_dys")), to_int(r.get("frgnr_cont_netprps_dys")))
+        self._flow = (now, out)
+        return out
+
+    def listed_instruments(self) -> list[Instrument]:
+        """코스피·코스닥 종목 리스트(ka10099)의 이름과 업종(upName). 업종 편중 제한과 화면 종목명에 씁니다."""
+        out: list[Instrument] = []
+        for market_type, label in (("0", "KOSPI"), ("10", "KOSDAQ")):
+            for r in self._stock_list(market_type):
+                code = str(r.get("code") or "").strip()
+                if len(code) == 6:
+                    out.append(Instrument(code, str(r.get("name") or code).strip(), label, str(r.get("upName") or "").strip() or "기타"))
+        return out
 
     def risky_symbols(self) -> set[str]:
         """관리종목·거래정지·투자유의 종목 (ka10099 종목정보 리스트, 하루 한 번 조회)."""

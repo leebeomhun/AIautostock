@@ -232,8 +232,8 @@ def test_partial_bar_volume_is_projected_to_a_full_day():
 
 
 def test_close_window_volume_still_needs_projection():
-    # 15:00–15:20 판단 구간에도 하루 거래량의 10–15%는 아직 안 쌓였습니다. 누적 1.4배면 하루치로는 1.5배를 넘습니다.
-    raw = _breakout_today(1400)
+    # 15:00–15:20 판단 구간에도 하루 거래량의 10–15%는 아직 안 쌓였습니다. 누적이 기준의 93%여도 하루치로는 기준을 넘습니다.
+    raw = _breakout_today(signals.BREAKOUT_VOLUME_RATIO * 1000 * 0.93)
     assert not entry_frame("momentum", raw)["entry"].iloc[-1]
     assert entry_frame("momentum", project_partial_bar(raw, datetime(2026, 10, 29, 15, 10)))["entry"].iloc[-1]
     # 오늘 봉이 아니거나(장 마감 뒤·전일 봉) 장 밖이면 환산하지 않습니다.

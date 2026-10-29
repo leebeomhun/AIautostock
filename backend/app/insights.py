@@ -21,6 +21,9 @@ from app.quant.signals import Signal, clamp
 RESEARCH_BUY_HAIRCUT: dict[str, tuple[float, float]] = {"Underweight": (0.1, 0.5), "Sell": (0.2, 0.25)}
 RATING_SIDE = {"Buy": ("buy", 0.8), "Overweight": ("buy", 0.55), "Hold": ("neutral", 0.2), "Underweight": ("sell", 0.55), "Sell": ("sell", 0.8)}
 RATING_KO = {"Buy": "매수", "Overweight": "비중 확대", "Hold": "보유", "Underweight": "비중 축소", "Sell": "매도"}
+# ML 순위 상위 이 비율 안의 종목은 매수 점수를 더 올립니다 (예측력이 검증된 경우만). 순위 보정 ±0.05 에 더해 최대 +0.1.
+ML_TOP_PCT = 0.2
+ML_TOP_BONUS = 0.05
 
 
 class Insights:
@@ -85,7 +88,11 @@ class Insights:
         }
 
     def ml_signal(self, symbol: str, side: str, today: date) -> tuple[Signal, float] | None:
-        """(근거 시그널, 점수 보정값). 상위 30% 는 매수 쪽, 하위 30% 는 관망·매도 쪽 근거."""
+        """(근거 시그널, 점수 보정값). 상위 30% 는 매수 쪽, 하위 30% 는 관망·매도 쪽 근거.
+
+        매수 점수 보정은 순위에 따라 ±0.05 이고, 상위 ML_TOP_PCT 는 ML_TOP_BONUS 를 더합니다.
+        엔진은 이 보정을 진입 후보 정렬 전에 반영합니다. 검증 순위 IC 가 낮거나 불안정하면 보정 없이 참고만 합니다.
+        """
         row = self.ml_for(symbol, today)
         if row is None:
             return None
@@ -97,7 +104,7 @@ class Insights:
         else:
             sig_side = "sell" if top >= 0.7 else "hold" if top <= 0.3 else "neutral"
         strength = clamp(abs(0.5 - top) * 2)
-        adjust = (0.5 - top) * 0.1 if side == "buy" else (top - 0.5) * 0.1
+        adjust = (0.5 - top) * 0.1 + (ML_TOP_BONUS if top <= ML_TOP_PCT else 0.0) if side == "buy" else (top - 0.5) * 0.1
         ic = row.get("valid_rank_ic")
         folds = row.get("fold_rank_ics") or []
         positive = sum(1 for v in folds if v > 0)

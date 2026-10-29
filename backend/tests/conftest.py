@@ -21,6 +21,8 @@ def settings(tmp_path) -> Settings:
         kiwoom_mock_app_secret=None,
         engine_enabled=False,
         frontend_dist=tmp_path / "no-dist",
+        # 실제 data/ 의 ML 점수·리서치 결과를 읽지 않도록 합니다.
+        data_dir=tmp_path / "data",
     )
 
 
