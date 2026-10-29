@@ -59,7 +59,8 @@ npm run dev
 - **ML 점수** `python -m app.ml.nightly` — qlib Alpha158 팩터 정의(157개, VWAP 제외)를 옮기고 LightGBM 으로 다음 거래일 순위를 학습합니다.
   qlib 의 RobustZScoreNorm·CSRankNorm 순서를 따릅니다. 최근 60일 검증 순위 IC 가 0.02 미만이면 판단 점수에 반영하지 않고 참고로만 보여 줍니다.
 - **심층 리서치** `python -m app.research.daily [--symbols 005930] [--force]` — TradingAgents 의 역할 구성(기술·뉴스·펀더멘털 애널리스트 → 강세/약세 토론 → 포트폴리오 매니저 5단계 등급)을
-  OpenAI 로 구현했습니다. 대상은 보유 종목 + ML 상위 종목, 최대 `RESEARCH_MAX_SYMBOLS`(기본 5), 종목당 OpenAI 호출 6회 안팎.
+  OpenAI 로 구현했습니다. 대상은 보유 종목 + 모멘텀 종목 범위 안의 돌파 임박 종목(전날 종가가 20일 최고 종가 3% 이내·60일선 위),
+  최대 `RESEARCH_MAX_SYMBOLS`(기본 5), 종목당 OpenAI 호출 6회 안팎. 전날 ML 순위는 대상 선정에 쓰지 않습니다.
   Underweight·Sell 종목은 신규 매수를 막지 않고 점수를 깎고 매수 금액을 줄입니다 (Underweight 50%, Sell 25%). 원본 TradingAgents 를 설치하고 `RESEARCH_ENGINE=tradingagents` 로 바꾸면 원본을 씁니다.
 - qlib·TradingAgents 원본 패키지는 이 서버(aarch64)에서 GitHub 소스 설치가 필요해 기본 구성에는 넣지 않았습니다.
 
@@ -84,13 +85,22 @@ npm run dev
 - 청산: 손절·익절(절반) · 일부 익절 뒤 최고 종가 대비 트레일링(손절폭 2–3배, 변동성 맞춤) · 20일선 이탈 · 10거래일에 +3% 미만.
 - 업종 쏠림 제한 `MAX_POSITIONS_PER_SECTOR` 은 백테스트에서 수익만 줄어 기본 끔(0)입니다.
 
+## 운영 점검
+
+- `uv run python -m app.ops [--days 30]` — 모의 체결 평균가와 그날 종가의 차이(백테스트는 종가 체결 가정)와 ML 판단 반영 여부를 출력합니다.
+  15:40(종가 확정) 뒤에 보고, 평균 불리 폭이 슬리피지 가정(`SLIPPAGE_RATE`, 0.05%)보다 크면 백테스트 성과를 그만큼 깎아 봅니다.
+- 18:40 ML 배치 뒤: `pm2 logs autostock-ml --lines 20` 의 `구간별 [...]` 과 `판단 반영: 예/아니오` 줄을 확인합니다.
+  검증 순위 IC 평균 0.02 이상이고 3개 구간 중 2개 이상 양수일 때만 엔진이 ML 점수를 씁니다 (`Insights.ml_gate`).
+- 전략 배분 변경: 설정 화면 '배분 변경' 또는 `PATCH /api/strategies/{id}` `{"allocation": 7000000}`. 보유 종목은 팔지 않고 신규 매수 한도만 바뀝니다.
+
 ## 안전장치
 
 - 기본은 `KIWOOM_MODE=mock` (모의투자 서버). 실전 키는 `KIWOOM_MODE=real` 일 때만 씁니다.
 - 실전 계좌로 연결해도 설정 화면에서 '실전 주문 허용'을 하기 전까지는 알림만 보냅니다. 허용은 `PAPER_DAYS_BEFORE_LIVE`(기본 14일) 운영 후 열립니다.
 - 긴급 정지: 승인 대기를 취소하고 미체결 주문에 취소를 요청합니다.
 - 일일 손실 한도: 50% 알림, 80% 신규 매수 절반, 100% 신규 매수 중지(또는 모든 매매 중지).
-- 공휴일은 판단하지 않습니다. 휴장일에 낸 주문은 키움이 거부합니다.
+- KRX 휴장일(공휴일·대체공휴일·선거일·12/31)에는 판단·주문하지 않습니다. 목록(`app/market/calendar.py`)은 2027-12-31까지이고 그 뒤는 갱신 전까지 휴장으로 봅니다.
+  임시공휴일은 `KRX_EXTRA_HOLIDAYS=2026-11-02,...` 로 더합니다.
 - 수수료·세율(`FEE_RATE`, `SELL_TAX_RATE`)은 백테스트와 로컬 시뮬레이션용 가정치입니다. 실제 체결 비용은 키움 체결 내역 값을 씁니다.
 
 AI의 매매 신호는 수익을 보장하지 않으며, 투자 판단과 결과의 책임은 투자자 본인에게 있습니다.

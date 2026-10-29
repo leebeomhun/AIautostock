@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     sell_tax_rate: float = 0.0018
     slippage_rate: float = 0.0005
 
+    # app.market.calendar 목록에 없는 임시 휴장일 ('2026-11-02,2026-11-03'). 이 날은 엔진이 판단·주문하지 않습니다.
+    krx_extra_holidays: str = ""
+
     # 실전 계좌(KIWOOM_MODE=real)에서 주문을 허용하기 전 필요한 모의투자 운영 일수
     paper_days_before_live: int = 14
 

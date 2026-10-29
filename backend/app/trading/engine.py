@@ -1027,6 +1027,9 @@ class TradingEngine:
                 raise EngineError("AI가 정지된 상태입니다. 다시 시작한 뒤 승인해 주세요")
             if self.broker.is_live and not st.live_confirmed:
                 raise EngineError("실전 계좌 주문이 아직 허용되지 않았습니다")
+            status = self.market.status(now)
+            if not status.open:
+                raise EngineError(f"장이 열려 있지 않아 주문할 수 없습니다 ({status.label})")
             qty = d.qty if qty is None else int(qty)
             if qty <= 0 or qty > d.max_qty:
                 raise EngineError(f"수량은 1~{d.max_qty}주 사이여야 합니다")

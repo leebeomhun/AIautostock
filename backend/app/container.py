@@ -11,6 +11,7 @@ from app.insights import Insights
 from app.config import Settings
 from app.db import make_session_factory
 from app.market.base import MarketData
+from app.market.calendar import set_extra_holidays
 from app.market.simulated import SimulatedMarket
 from app.trading.broker import Broker, PaperBroker
 from app.trading.engine import TradingEngine
@@ -53,6 +54,7 @@ class Container:
 
 def build_market(settings: Settings) -> tuple[MarketData, object | None]:
     """시세만 필요한 배치 작업(ML·리서치)도 쓰도록 시세 객체를 따로 만듭니다. (시세, 키움 클라이언트 또는 None)"""
+    set_extra_holidays(settings.krx_extra_holidays)
     if settings.use_kiwoom:
         from app.kiwoom.client import KiwoomClient
         from app.kiwoom.market import KiwoomMarket

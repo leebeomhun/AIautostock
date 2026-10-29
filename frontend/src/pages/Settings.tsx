@@ -26,7 +26,13 @@ function Strategies() {
   const { refresh: refreshShell } = useShell()
   const { data, refresh } = usePolling(() => fetch('/api/strategies').then((r) => r.json() as Promise<StrategyItem[]>), 15000)
   const { busy, error, run } = useAction()
-  const set = (id: number, status: string) => run(() => api.patchStrategy(id, status)).then(() => { refresh(); refreshShell() })
+  const set = (id: number, status: string) => run(() => api.patchStrategy(id, { status })).then(() => { refresh(); refreshShell() })
+  const realloc = (s: StrategyItem) => {
+    const raw = window.prompt(`${s.name} 전략에 맡길 금액(원)을 입력하세요. 줄여도 보유 종목은 팔지 않고 신규 매수 한도만 바뀝니다.`, String(s.allocation))
+    const amount = raw == null ? NaN : Number(raw.replace(/[^0-9]/g, ''))
+    if (!Number.isFinite(amount) || amount <= 0 || amount === s.allocation) return
+    run(() => api.patchStrategy(s.id, { allocation: amount })).then(() => { refresh(); refreshShell() })
+  }
   return (
     <section className="card" aria-labelledby="st-h">
       <h2 id="st-h">전략 관리</h2>
@@ -49,6 +55,7 @@ function Strategies() {
               ) : (
                 <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => set(s.id, 'running')}>다시 실행</button>
               )}
+              <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => realloc(s)}>배분 변경</button>
               <button
                 type="button"
                 className="btn btn-ghost"

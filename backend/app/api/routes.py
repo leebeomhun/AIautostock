@@ -308,20 +308,38 @@ def post_strategy(request: Request, body: StrategyIn) -> dict:
 
 
 class StrategyPatch(BaseModel):
-    status: Literal["running", "paused", "stopped"]
+    status: Literal["running", "paused", "stopped"] | None = None
+    # 맡긴 금액(원). 줄여도 보유 종목을 팔지 않고, 평가금액이 새 배분을 넘는 동안 신규 매수만 멈춥니다.
+    allocation: int | None = Field(default=None, gt=0)
 
 
 @router.patch("/strategies/{strategy_id}")
 def patch_strategy(request: Request, strategy_id: int, body: StrategyPatch) -> dict:
     c = container(request)
+    if body.status is None and body.allocation is None:
+        raise HTTPException(status_code=400, detail="바꿀 항목(status 또는 allocation)을 보내 주세요")
     with c.engine.lock, session_scope(c.session_factory) as s:
         st = s.get(Strategy, strategy_id)
         if st is None:
             raise HTTPException(status_code=404, detail="전략을 찾을 수 없습니다")
-        st.status, st.paused_auto = body.status, False
-        st.pause_reason = "사용자가 일시정지 · 보유 종목 손절·익절은 계속 관리합니다" if body.status == "paused" else None
-        label = {"running": "다시 실행", "paused": "일시정지", "stopped": "중지"}[body.status]
-        s.add(Activity(kind="strategy", title=f"{st.name} 전략 {label}", detail=st.pause_reason or ""))
+        if body.allocation is not None and body.allocation != st.allocation:
+            others = s.scalar(
+                select(func.coalesce(func.sum(Strategy.allocation), 0)).where(Strategy.status != "stopped", Strategy.id != st.id)
+            ) or 0
+            equity = c.engine.account().equity
+            if st.status != "stopped" and others + body.allocation > equity:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"전략 배분 합계({others + body.allocation:,.0f}원)가 계좌 평가자산({equity:,.0f}원)을 넘습니다. 다른 전략 배분을 먼저 줄여 주세요",
+                )
+            before, st.allocation = st.allocation, body.allocation
+            s.add(Activity(kind="strategy", title=f"{st.name} 배분 변경", detail=f"{before:,}원 → {body.allocation:,}원 · 보유 종목은 그대로 두고 신규 매수 한도만 바꿉니다"))
+            ledger.append(s, "strategy.allocation", str(st.id), {"from": before, "to": body.allocation}, now_kst())
+        if body.status is not None:
+            st.status, st.paused_auto = body.status, False
+            st.pause_reason = "사용자가 일시정지 · 보유 종목 손절·익절은 계속 관리합니다" if body.status == "paused" else None
+            label = {"running": "다시 실행", "paused": "일시정지", "stopped": "중지"}[body.status]
+            s.add(Activity(kind="strategy", title=f"{st.name} 전략 {label}", detail=st.pause_reason or ""))
         return _strategy_dict(st)
 
 

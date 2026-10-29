@@ -24,7 +24,9 @@ import pandas as pd
 from app.config import get_settings
 from app.container import build_market
 from app.db import now_kst
+from app.insights import Insights
 from app.market.base import krx_session_status
+from app.market.calendar import is_trading_day
 from app.market.universe import UNIVERSES
 from app.ml.alpha158 import features, label
 
@@ -211,6 +213,9 @@ def main() -> None:
     if not args.force and krx_session_status(now_kst()).open:
         log.info("정규장 중이라 건너뜁니다. 장 마감 후 다시 돌거나 --force 로 실행하세요")
         return
+    if not args.force and not is_trading_day(now_kst().date()):
+        log.info("KRX 휴장일이라 새 일봉이 없어 건너뜁니다. --force 로 실행할 수 있습니다")
+        return
     out = args.out or get_settings().data_dir / "ml"
     started = datetime.now()
     result = run(out)
@@ -220,6 +225,9 @@ def main() -> None:
         "완료 %s · %d종목 · 검증 IC %.4f / Rank IC %.4f (구간별 %s) · 상위 %s · %s",
         result["as_of"], m["symbols"], m["valid_ic"], m["valid_rank_ic"], m["fold_rank_ics"], top, datetime.now() - started,
     )
+    # 운영 점검: 엔진이 이 결과를 판단 점수에 반영하는지 (app.insights.Insights.ml_gate 와 같은 기준)
+    ok, why = Insights(get_settings().data_dir).ml_gate(m["valid_rank_ic"], m["fold_rank_ics"])
+    log.info("판단 반영: %s · %s", "예" if ok else "아니오 (근거로만 표시)", why)
 
 
 if __name__ == "__main__":

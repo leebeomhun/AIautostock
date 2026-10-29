@@ -63,10 +63,15 @@ class MarketData(Protocol):
 
 
 def krx_session_status(now: datetime) -> MarketStatus:
-    """KRX 정규장 09:00–15:30 (KST, 평일). 공휴일은 판단하지 않으므로 휴장일에는 주문이 거부될 수 있습니다."""
+    """KRX 정규장 09:00–15:30 (KST, 평일). 공휴일·연말 휴장일(app.market.calendar)과 캘린더 범위 밖 날짜는 닫힌 것으로 봅니다."""
+    from app.market.calendar import holiday_name
+
     hhmm = now.strftime("%H:%M")
     if now.weekday() >= 5:
         return MarketStatus(False, f"주말 휴장 · {hhmm}")
+    holiday = holiday_name(now.date())
+    if holiday:
+        return MarketStatus(False, f"휴장일 ({holiday}) · {hhmm}")
     minutes = now.hour * 60 + now.minute
     if 9 * 60 <= minutes < 15 * 60 + 30:
         return MarketStatus(True, f"정규장 운영 중 · {hhmm}")

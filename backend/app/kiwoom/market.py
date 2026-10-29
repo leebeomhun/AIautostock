@@ -11,6 +11,7 @@ import pandas as pd
 from app.db import now_kst
 from app.kiwoom.client import KiwoomClient, to_float, to_int
 from app.market.base import Instrument, MarketStatus, Quote, krx_session_status
+from app.market.calendar import is_trading_day
 
 CHART_PATH = "/api/dostk/chart"
 STKINFO_PATH = "/api/dostk/stkinfo"
@@ -104,8 +105,8 @@ class KiwoomMarket:
 
     @staticmethod
     def _bar_phase(at: datetime) -> str:
-        """오늘 봉의 상태: before(아직 없음) · live(바뀌는 중) · settled(확정). 주말은 오늘 봉이 없어 settled 로 봅니다."""
-        if at.weekday() >= 5:
+        """오늘 봉의 상태: before(아직 없음) · live(바뀌는 중) · settled(확정). 주말·휴장일은 오늘 봉이 없어 settled 로 봅니다."""
+        if not is_trading_day(at.date()):
             return "settled"
         minutes = at.hour * 60 + at.minute
         if minutes < 9 * 60:

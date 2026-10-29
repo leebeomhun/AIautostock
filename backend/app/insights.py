@@ -105,18 +105,25 @@ class Insights:
             sig_side = "sell" if top >= 0.7 else "hold" if top <= 0.3 else "neutral"
         strength = clamp(abs(0.5 - top) * 2)
         adjust = (0.5 - top) * 0.1 + (ML_TOP_BONUS if top <= ML_TOP_PCT else 0.0) if side == "buy" else (top - 0.5) * 0.1
-        ic = row.get("valid_rank_ic")
-        folds = row.get("fold_rank_ics") or []
-        positive = sum(1 for v in folds if v > 0)
-        low = ic is None or ic != ic or ic < self.min_rank_ic
-        # 검증 구간 과반에서 순위 IC 가 양수여야 합니다. 한 구간만 좋았던 모델은 쓰지 않습니다.
-        unstable = bool(folds) and positive * 2 <= len(folds)
-        if low or unstable:
+        ok, why = self.ml_gate(row.get("valid_rank_ic"), row.get("fold_rank_ics"))
+        if not ok:
             # 최근 검증 구간에서 예측력이 없으면 근거로만 보여 주고 판단에는 반영하지 않습니다.
-            ic_text = "없음" if ic is None or ic != ic else f"{ic:.3f}"
-            why = "예측력이 낮아" if low else f"검증 구간 {len(folds)}개 중 {positive}개만 양수라"
-            return Signal("ml", "ML 랭킹 (qlib)", f"{detail} · 검증 순위 IC {ic_text}, {why} 참고만", "neutral", 0.0), 0.0
-        return Signal("ml", "ML 랭킹 (qlib)", f"{detail} · 검증 순위 IC {ic:.3f}", sig_side, strength), adjust
+            return Signal("ml", "ML 랭킹 (qlib)", f"{detail} · {why}", "neutral", 0.0), 0.0
+        return Signal("ml", "ML 랭킹 (qlib)", f"{detail} · {why}", sig_side, strength), adjust
+
+    def ml_gate(self, ic: float | None, folds: list[float] | None) -> tuple[bool, str]:
+        """ML 점수를 판단에 반영해도 되는지와 그 이유. 엔진·야간 배치 로그·ops 점검이 같은 기준을 씁니다.
+
+        검증 순위 IC 평균이 min_rank_ic 이상이고, 검증 구간 과반에서 양수여야 합니다 (한 구간만 좋았던 모델은 쓰지 않음).
+        """
+        folds = folds or []
+        positive = sum(1 for v in folds if v > 0)
+        ic_text = "없음" if ic is None or ic != ic else f"{ic:.3f}"
+        if ic is None or ic != ic or ic < self.min_rank_ic:
+            return False, f"검증 순위 IC {ic_text}, 예측력이 낮아 참고만"
+        if folds and positive * 2 <= len(folds):
+            return False, f"검증 순위 IC {ic_text}, 검증 구간 {len(folds)}개 중 {positive}개만 양수라 참고만"
+        return True, f"검증 순위 IC {ic_text}"
 
     # ---- 심층 리서치 ----------------------------------------------------------
     def research_status(self) -> dict[str, Any] | None:
