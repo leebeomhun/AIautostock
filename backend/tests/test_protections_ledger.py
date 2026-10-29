@@ -62,7 +62,7 @@ def test_research_and_ml_add_signals(container, tmp_path):
     (tmp_path / "ml").mkdir()
     (tmp_path / "research").mkdir()
     syms = ["005930", "000660", "373220"]
-    (tmp_path / "ml" / "latest.json").write_text(json.dumps({"as_of": today, "model": "qlib-lgbm", "metrics": {"valid_rank_ic": 0.05}, "scores": {s: {"score": 0.1 - i * 0.05, "rank": i + 1, "pct": i / 2} for i, s in enumerate(syms)}}))
+    (tmp_path / "ml" / "latest.json").write_text(json.dumps({"as_of": today, "model": "qlib-lgbm", "metrics": {"valid_rank_ic": 0.05, "random_null": {"alpha_t": 3.0}}, "scores": {s: {"score": 0.1 - i * 0.05, "rank": i + 1, "pct": i / 2} for i, s in enumerate(syms)}}))
     (tmp_path / "research" / "latest.json").write_text(json.dumps({"as_of": today, "items": {"000660": {"rating": "Sell", "as_of": today, "summary": "과열", "report": "x.md"}}}))
     ins = Insights(tmp_path)
     sig, adjust = ins.ml_signal("005930", "buy", now_kst().date())

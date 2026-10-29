@@ -24,11 +24,11 @@ def _buys(c):
     return {p.candidate.symbol: p for p in c.engine._prepare(now_kst()) if p.candidate.side == "buy"}  # noqa: SLF001
 
 
-def _write_ml(c, pcts: dict[str, float], fold_ics: list[float]) -> None:
+def _write_ml(c, pcts: dict[str, float], fold_ics: list[float], null_t: float = 3.0) -> None:
     (c.settings.data_dir / "ml").mkdir(parents=True, exist_ok=True)
     ranked = sorted(pcts, key=pcts.get)
     scores = {s: {"score": 1 - pcts[s], "rank": ranked.index(s) + 1, "pct": pcts[s]} for s in pcts}
-    metrics = {"valid_rank_ic": sum(fold_ics) / len(fold_ics), "fold_rank_ics": fold_ics, "label_horizon": 5}
+    metrics = {"valid_rank_ic": sum(fold_ics) / len(fold_ics), "fold_rank_ics": fold_ics, "label_horizon": 5, "random_null": {"alpha_t": null_t}}
     (c.settings.data_dir / "ml" / "latest.json").write_text(json.dumps({"as_of": now_kst().strftime("%Y-%m-%d"), "model": "m", "metrics": metrics, "scores": scores}))
 
 

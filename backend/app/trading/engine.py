@@ -731,7 +731,7 @@ class TradingEngine:
         if not status or not self.insights._fresh(status.get("as_of"), self.insights.ml_max_age_days, now.date()):  # noqa: SLF001
             return None, "최근 ML 결과가 없어 리밸런싱하지 않습니다"
         metrics = status.get("metrics") or {}
-        ok, why = self.insights.ml_gate(metrics.get("valid_rank_ic"), metrics.get("fold_rank_ics"))
+        ok, why = self.insights.ml_gate(metrics)
         if not ok:
             return None, f"ML 예측력 검증 미달 · {why}"
         rows = sorted(((row["rank"], sym, row) for sym in symbols if (row := self.insights.ml_for(sym, now.date()))), key=lambda x: x[0])

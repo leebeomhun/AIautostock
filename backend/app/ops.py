@@ -71,11 +71,11 @@ def ml_review(insights: Insights, today: Any) -> dict[str, Any]:
     if not status:
         return {"ok": False, "why": "ML 결과 파일이 없습니다"}
     m = status.get("metrics") or {}
-    ok, why = insights.ml_gate(m.get("valid_rank_ic"), m.get("fold_rank_ics"))
+    ok, why = insights.ml_gate(m)
     fresh = insights._fresh(status.get("as_of"), insights.ml_max_age_days, today)  # noqa: SLF001
     if not fresh:
         ok, why = False, f"{status.get('as_of')} 결과라 오래돼 쓰지 않습니다 · {why}"
-    return {"ok": ok, "why": why, "as_of": status.get("as_of"), "model": status.get("model"), "symbols": status.get("count"), "fold_rank_ics": m.get("fold_rank_ics"), "valid_rank_ic": m.get("valid_rank_ic")}
+    return {"ok": ok, "why": why, "as_of": status.get("as_of"), "model": status.get("model"), "symbols": status.get("count"), "fold_rank_ics": m.get("fold_rank_ics"), "valid_rank_ic": m.get("valid_rank_ic"), "random_null": m.get("random_null")}
 
 
 def main() -> None:

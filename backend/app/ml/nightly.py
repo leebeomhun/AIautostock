@@ -30,6 +30,7 @@ from app.market.calendar import is_trading_day
 from app.market.flow_store import save_snapshot
 from app.market.universe import UNIVERSES
 from app.ml.alpha158 import features, label
+from app.ml.random_null import random_null
 
 log = logging.getLogger("ml.nightly")
 
@@ -131,13 +132,16 @@ def train_and_score(histories: dict[str, pd.DataFrame], horizon: int = LABEL_HOR
 
     # 구간마다 그 이전 데이터로만 정규화·학습하고 그 구간의 순위 IC 를 잽니다 (시간 순서를 지킨 교차 검증).
     folds: list[dict[str, Any]] = []
+    oos: list[pd.Series] = []
     for k in range(FOLDS, 0, -1):
         valid_dates = labeled[len(labeled) - k * VALID_DAYS : len(labeled) - (k - 1) * VALID_DAYS]
         train_dates = labeled[labeled < valid_dates[0]][:-gap]
         xn = robust_zscore(x, x[in_dates(train_dates)])
         model, best = _fit(xn, yn, train_dates, in_dates, gap)
         va = in_dates(valid_dates) & yn.notna().to_numpy()
-        ic, rank_ic = daily_ic(pd.Series(model.predict(xn[va], num_iteration=best), index=xn[va].index), y[va])
+        pred_va = pd.Series(model.predict(xn[va], num_iteration=best), index=xn[va].index)
+        oos.append(pred_va)
+        ic, rank_ic = daily_ic(pred_va, y[va])
         folds.append({"start": valid_dates[0].strftime("%Y-%m-%d"), "end": valid_dates[-1].strftime("%Y-%m-%d"), "ic": round(ic, 4), "rank_ic": round(rank_ic, 4), "best_iteration": int(best)})
 
     # 라벨이 있는 전체 구간으로 다시 학습한 모델로 최신 날짜를 예측합니다.
@@ -155,6 +159,7 @@ def train_and_score(histories: dict[str, pd.DataFrame], horizon: int = LABEL_HOR
     }
     importance = pd.Series(final.feature_importance("gain"), index=xn.columns).sort_values(ascending=False)
     fold_ric = [f["rank_ic"] for f in folds]
+    oos_pred = pd.concat(oos)
     return {
         "as_of": latest.strftime("%Y-%m-%d"),
         "model": f"{MODEL_NAME} · {horizon}일 라벨",
@@ -166,6 +171,8 @@ def train_and_score(histories: dict[str, pd.DataFrame], horizon: int = LABEL_HOR
             "fold_rank_ics": fold_ric,
             "positive_folds": int(sum(1 for v in fold_ric if v > 0)),
             "folds": folds,
+            # 검증 구간 예측을 같은 날 랜덤 셔플 대조군과 비교 (Insights.ml_gate 가 alpha_t 를 봅니다)
+            "random_null": random_null(oos_pred, y.reindex(oos_pred.index), horizon),
             "train_days": int(len(labeled) - VALID_DAYS - gap),
             "valid_days": int(FOLDS * VALID_DAYS),
             "symbols": n,
@@ -243,7 +250,7 @@ def main() -> None:
         result["as_of"], m["symbols"], m["valid_ic"], m["valid_rank_ic"], m["fold_rank_ics"], top, datetime.now() - started,
     )
     # 운영 점검: 엔진이 이 결과를 판단 점수에 반영하는지 (app.insights.Insights.ml_gate 와 같은 기준)
-    ok, why = Insights(get_settings().data_dir).ml_gate(m["valid_rank_ic"], m["fold_rank_ics"])
+    ok, why = Insights(get_settings().data_dir).ml_gate(m)
     log.info("판단 반영: %s · %s", "예" if ok else "아니오 (근거로만 표시)", why)
 
 

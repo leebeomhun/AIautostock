@@ -27,8 +27,9 @@ ML_TOP_BONUS = 0.05
 
 
 class Insights:
-    def __init__(self, data_dir: Path, ml_max_age_days: int = 4, research_max_age_days: int = 3, min_rank_ic: float = 0.02) -> None:
+    def __init__(self, data_dir: Path, ml_max_age_days: int = 4, research_max_age_days: int = 3, min_rank_ic: float = 0.02, min_null_t: float = 2.0) -> None:
         self.min_rank_ic = min_rank_ic
+        self.min_null_t = min_null_t
         self.ml_path = Path(data_dir) / "ml" / "latest.json"
         self.research_dir = Path(data_dir) / "research"
         self.ml_max_age_days = ml_max_age_days
@@ -84,6 +85,7 @@ class Insights:
             "count": len(data["scores"]),
             "valid_rank_ic": m.get("valid_rank_ic"),
             "fold_rank_ics": m.get("fold_rank_ics"),
+            "random_null": m.get("random_null"),
             "horizon": m.get("label_horizon", 1),
         }
 
@@ -105,25 +107,33 @@ class Insights:
             sig_side = "sell" if top >= 0.7 else "hold" if top <= 0.3 else "neutral"
         strength = clamp(abs(0.5 - top) * 2)
         adjust = (0.5 - top) * 0.1 + (ML_TOP_BONUS if top <= ML_TOP_PCT else 0.0) if side == "buy" else (top - 0.5) * 0.1
-        ok, why = self.ml_gate(row.get("valid_rank_ic"), row.get("fold_rank_ics"))
+        ok, why = self.ml_gate(row)
         if not ok:
             # 최근 검증 구간에서 예측력이 없으면 근거로만 보여 주고 판단에는 반영하지 않습니다.
             return Signal("ml", "ML 랭킹 (qlib)", f"{detail} · {why}", "neutral", 0.0), 0.0
         return Signal("ml", "ML 랭킹 (qlib)", f"{detail} · {why}", sig_side, strength), adjust
 
-    def ml_gate(self, ic: float | None, folds: list[float] | None) -> tuple[bool, str]:
-        """ML 점수를 판단에 반영해도 되는지와 그 이유. 엔진·야간 배치 로그·ops 점검이 같은 기준을 씁니다.
+    def ml_gate(self, metrics: dict[str, Any] | None) -> tuple[bool, str]:
+        """ML 점수를 판단에 반영해도 되는지와 그 이유. 엔진(ML 가산·ml_topn)·야간 배치 로그·ops 점검이 같은 기준을 씁니다.
 
-        검증 순위 IC 평균이 min_rank_ic 이상이고, 검증 구간 과반에서 양수여야 합니다 (한 구간만 좋았던 모델은 쓰지 않음).
+        검증 순위 IC 평균이 min_rank_ic 이상이고, 검증 구간 과반에서 양수이고 (한 구간만 좋았던 모델은 쓰지 않음),
+        같은 날 랜덤 셔플 대조군보다 IC 가 뚜렷이 높아야 (app.ml.random_null 의 alpha_t > min_null_t) 합니다.
+        대조 결과가 없는 예전 파일은 반영하지 않습니다.
         """
-        folds = folds or []
+        m = metrics or {}
+        ic, folds = m.get("valid_rank_ic"), m.get("fold_rank_ics") or []
+        null_t = (m.get("random_null") or {}).get("alpha_t")
         positive = sum(1 for v in folds if v > 0)
         ic_text = "없음" if ic is None or ic != ic else f"{ic:.3f}"
         if ic is None or ic != ic or ic < self.min_rank_ic:
             return False, f"검증 순위 IC {ic_text}, 예측력이 낮아 참고만"
         if folds and positive * 2 <= len(folds):
             return False, f"검증 순위 IC {ic_text}, 검증 구간 {len(folds)}개 중 {positive}개만 양수라 참고만"
-        return True, f"검증 순위 IC {ic_text}"
+        if null_t is None:
+            return False, f"검증 순위 IC {ic_text}, 랜덤 셔플 대조 결과가 없어 참고만"
+        if null_t <= self.min_null_t:
+            return False, f"검증 순위 IC {ic_text}, 랜덤 셔플 대조 대비 t {null_t:.1f} (기준 {self.min_null_t:g} 초과)라 참고만"
+        return True, f"검증 순위 IC {ic_text} · 랜덤 대조 t {null_t:.1f}"
 
     # ---- 심층 리서치 ----------------------------------------------------------
     def research_status(self) -> dict[str, Any] | None:

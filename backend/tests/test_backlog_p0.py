@@ -173,7 +173,7 @@ def test_ml_review_uses_engine_gate(tmp_path):
     today = now_kst().date()
     (tmp_path / "ml").mkdir()
     path = tmp_path / "ml" / "latest.json"
-    path.write_text(json.dumps({"as_of": today.isoformat(), "model": "m", "scores": {"A": {}}, "metrics": {"valid_rank_ic": 0.04, "fold_rank_ics": [0.05, 0.03, -0.01]}}))
+    path.write_text(json.dumps({"as_of": today.isoformat(), "model": "m", "scores": {"A": {}}, "metrics": {"valid_rank_ic": 0.04, "fold_rank_ics": [0.05, 0.03, -0.01], "random_null": {"alpha_t": 2.5}}}))
     assert ml_review(Insights(tmp_path), today)["ok"]
     path.write_text(json.dumps({"as_of": today.isoformat(), "model": "m", "scores": {"A": {}}, "metrics": {"valid_rank_ic": 0.04, "fold_rank_ics": [0.12, -0.01, -0.02]}}))
     review = ml_review(Insights(tmp_path), today)

@@ -77,7 +77,7 @@ def test_ml_top_rank_gets_extra_buy_bonus_only_when_validated(tmp_path):
     scores = {"A": {"score": 1, "rank": 1, "pct": 0.1}, "B": {"score": 0, "rank": 5, "pct": 0.5}}
 
     def write(ics):
-        metrics = {"valid_rank_ic": sum(ics) / len(ics), "fold_rank_ics": ics, "label_horizon": 5}
+        metrics = {"valid_rank_ic": sum(ics) / len(ics), "fold_rank_ics": ics, "label_horizon": 5, "random_null": {"alpha_t": 3.0}}
         (tmp_path / "ml" / "latest.json").write_text(json.dumps({"as_of": today, "model": "m", "metrics": metrics, "scores": scores}))
 
     write([0.05, 0.04, 0.03])
@@ -182,7 +182,7 @@ def test_ml_rank_reorders_entries_before_tick_cap(container, tmp_path, monkeypat
     syms = ["005930", "000660", "005380", "000270"]
     pcts = {"005930": 1.0, "000660": 0.6, "005380": 0.4, "000270": 0.0}
     scores = {s: {"score": 1 - p, "rank": int(p * 3) + 1, "pct": p} for s, p in pcts.items()}
-    metrics = {"valid_rank_ic": 0.05, "fold_rank_ics": [0.05, 0.04, 0.06], "label_horizon": 5}
+    metrics = {"valid_rank_ic": 0.05, "fold_rank_ics": [0.05, 0.04, 0.06], "label_horizon": 5, "random_null": {"alpha_t": 3.0}}
     (tmp_path / "ml" / "latest.json").write_text(json.dumps({"as_of": today, "model": "m", "metrics": metrics, "scores": scores}))
     c.engine.insights = Insights(tmp_path)
     _momentum(c, syms)
